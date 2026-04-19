@@ -35,37 +35,27 @@ def _set_chinese_font():
 
     # 第一步：读取项目根目录中的字体文件（最稳定）
     _base_dir = os.path.dirname(os.path.abspath(__file__))
-    _local_font = os.path.join(_base_dir, "NotoSansSC-Regular.ttf")
+    _local_font = os.path.join(_base_dir, "NotoSansSC-Regular.ttf.otf")
+    if not os.path.exists(_local_font):
+        _local_font = os.path.join(_base_dir, "NotoSansSC-Regular.ttf")
     if os.path.exists(_local_font):
         try:
             fm.fontManager.addfont(_local_font)
             prop = fm.FontProperties(fname=_local_font)
             matplotlib.rcParams["font.family"] = prop.get_name()
             matplotlib.rcParams["axes.unicode_minus"] = False
-            return prop.get_name()
+            return prop.get_name(), _local_font, "找到本地字体文件"
+        except Exception as e:
+            return None, _local_font, f"字体加载失败：{e}"
+    else:
+        # 列出目录中的文件帮助调试
+        try:
+            files = os.listdir(_base_dir)
         except Exception:
-            pass
+            files = []
+        return None, _base_dir, f"字体文件不存在，目录内容：{files}"
 
-    # 第二步：查找系统已有中文字体（本地 Windows/Mac 备用）
-    candidates = [
-        "Microsoft YaHei", "微软雅黑",
-        "SimHei", "黑体",
-        "SimSun", "宋体",
-        "Noto Sans CJK SC", "NotoSansSC",
-        "WenQuanYi Micro Hei",
-        "Arial Unicode MS",
-    ]
-    available = {f.name for f in fm.fontManager.ttflist}
-    for font in candidates:
-        if font in available:
-            matplotlib.rcParams["font.family"] = font
-            matplotlib.rcParams["axes.unicode_minus"] = False
-            return font
-
-    matplotlib.rcParams["axes.unicode_minus"] = False
-    return None
-
-_set_chinese_font()
+_font_name, _font_path, _font_msg = _set_chinese_font()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 配置 & 样式
@@ -846,6 +836,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+
+# ── 字体调试信息（临时，确认后删除）──────────────────────────────────────────
+st.caption(f"🔤 字体调试：{_font_msg} | 字体名：{_font_name} | 路径：{_font_path}")
+# ─────────────────────────────────────────────────────────────────────────────
+
 render_step_bar(st.session_state.step)
 st.markdown("<hr class='divider'>", unsafe_allow_html=True)
 
