@@ -326,6 +326,7 @@ def apply_plot_style(fig, ax):
 # ══════════════════════════════════════════════════════════════════════════════
 defaults = {
     "step":                      1,
+    "lang":                      "zh",  # zh=中文 en=English
     "question":                  "",
     "df":                        None,
     "col_info":                  {},
@@ -419,7 +420,8 @@ def miss_badge(pct) -> str:
 
 
 def render_ai(label: str, text: str, is_ai: bool = True):
-    source = "✦ AI 解读" if is_ai else "✦ 规则解读"
+    _T = _get_T()
+    source = _T.get("ai_label","✦ AI 解读") if is_ai else _T.get("rule_label","✦ 规则解读")
     lines = text.split("\n")
     formatted_lines = []
     for line in lines:
@@ -517,8 +519,7 @@ def _is_api_error(text: str) -> bool:
                                       or "错误" in text or "连接" in text)
 
 
-def fallback_desc(stats_dict: dict, focus_var: str) -> str:
-    """描述性统计本地规则解读（分点格式）"""
+def fallback_desc(stats_dict: dict, focus_var: str, lang: str = "zh") -> str:
     lines = []
     if focus_var in stats_dict:
         s = stats_dict[focus_var]
@@ -527,60 +528,70 @@ def fallback_desc(stats_dict: dict, focus_var: str) -> str:
         skew = s.get("偏度", 0)
         kurt = s.get("峰度", 0)
         diff_pct = abs(mean - median) / (abs(mean) + 1e-9) * 100
-        if diff_pct < 5:
-            lines.append(f"1. [集中趋势] 均值 {mean:.3f}，中位数 {median:.3f}，二者接近 — 数据分布较对称，无明显偏斜。")
-        elif mean > median:
-            lines.append(f"1. [集中趋势] 均值 {mean:.3f} > 中位数 {median:.3f} — 分布呈右偏，少数高值拉高了均值，中位数更能代表典型水平。")
-        else:
-            lines.append(f"1. [集中趋势] 均值 {mean:.3f} < 中位数 {median:.3f} — 分布呈左偏，少数低值拉低了均值，中位数更能代表典型水平。")
         cv = std / (abs(mean) + 1e-9)
-        if cv < 0.15:
-            lines.append(f"2. [离散程度] 标准差 {std:.3f}，变异系数 {cv:.2f} — 数据集中，个体间差异较小。")
-        elif cv < 0.5:
-            lines.append(f"2. [离散程度] 标准差 {std:.3f}，变异系数 {cv:.2f} — 存在一定离散程度，个体间有差异。")
+        if lang == "en":
+            t1 = f"1. [Central Tendency] Mean={mean:.3f}, Median={median:.3f} — {'Symmetric distribution.' if diff_pct < 5 else ('Right-skewed, mean pulled up by high values.' if mean > median else 'Left-skewed, mean pulled down by low values.')}"
+            t2 = f"2. [Dispersion] Std={std:.3f}, CV={cv:.2f} — {'Data is concentrated, low variation.' if cv < 0.15 else ('Moderate dispersion.' if cv < 0.5 else 'High dispersion, significant individual differences.')}"
+            t3 = f"3. [Distribution] Skewness={skew:.3f}, Kurtosis={kurt:.3f} — {'Approximately symmetric, near-normal.' if abs(skew) < 0.5 else ('Right-tailed, check for outliers.' if skew > 0 else 'Left-tailed, check for outliers.')}"
+            t4 = f"4. [Implication] These features suggest monitoring skewness effects on {focus_var}; use both mean and median for robust interpretation."
         else:
-            lines.append(f"2. [离散程度] 标准差 {std:.3f}，变异系数 {cv:.2f} — 数据离散程度高，个体差异显著，需关注异常值。")
-        if abs(skew) < 0.5:
-            lines.append(f"3. [分布形态] 偏度 {skew:.3f}，峰度 {kurt:.3f} — 分布接近对称，基本符合正态假设。")
-        elif skew > 0:
-            lines.append(f"3. [分布形态] 偏度 {skew:.3f}（正偏），峰度 {kurt:.3f} — 分布右拖尾，高值样本稀少但影响均值，建议检查极端值。")
-        else:
-            lines.append(f"3. [分布形态] 偏度 {skew:.3f}（负偏），峰度 {kurt:.3f} — 分布左拖尾，低值样本稀少但影响均值，建议检查极端值。")
-        lines.append(f"4. [研究意义] 以上分布特征表明，分析 {focus_var} 时需关注偏态对均值的影响，建议结合中位数与均值综合判断。")
+            t1 = f"1. [集中趋势] 均值 {mean:.3f}，中位数 {median:.3f}，{'二者接近 — 数据分布较对称。' if diff_pct < 5 else ('均值>中位数 — 分布右偏，少数高值拉高均值。' if mean > median else '均值<中位数 — 分布左偏，少数低值拉低均值。')}"
+            t2 = f"2. [离散程度] 标准差 {std:.3f}，变异系数 {cv:.2f} — {'数据集中，个体差异小。' if cv < 0.15 else ('存在一定离散程度。' if cv < 0.5 else '离散程度高，需关注异常值。')}"
+            t3 = f"3. [分布形态] 偏度 {skew:.3f}，峰度 {kurt:.3f} — {'分布接近对称，基本符合正态假设。' if abs(skew) < 0.5 else ('正偏，分布右拖尾。' if skew > 0 else '负偏，分布左拖尾。')}"
+            t4 = f"4. [研究意义] 分析 {focus_var} 时需关注偏态对均值的影响，建议结合中位数综合判断。"
+        lines = [t1, t2, t3, t4]
     else:
-        lines.append(f"1. [数据概况] 已完成 {focus_var} 的描述性统计计算 — 请参考上方表格了解均值、标准差和分布情况。")
+        if lang == "en":
+            lines.append(f"1. [Overview] Descriptive statistics computed for {focus_var} — see table above for mean, std, and distribution.")
+        else:
+            lines.append(f"1. [数据概况] 已完成 {focus_var} 的描述性统计计算 — 请参考上方表格。")
     return "\n".join(lines)
 
 
-def fallback_corr(var_pairs: list) -> str:
-    """相关性分析本地规则解读（分点格式）"""
+def fallback_corr(var_pairs: list, lang: str = "zh") -> str:
     if not var_pairs:
+        if lang == "en":
+            return "1. [Overview] Correlation matrix computed — see heatmap above; darker colors indicate stronger correlation."
         return "1. [数据概况] 已完成相关性矩阵计算 — 请参考上方热力图，颜色越深表示相关性越强。"
     strong, moderate, weak = [], [], []
     for v1, v2, r in var_pairs:
         ar = abs(r)
-        direction = "正相关" if r > 0 else "负相关"
+        direction = ("positive" if r > 0 else "negative") if lang == "en" else ("正相关" if r > 0 else "负相关")
         if ar >= 0.7:
-            strong.append(f"{v1} & {v2}（r={r:.3f}）")
+            strong.append(f"{v1} & {v2} (r={r:.3f})")
         elif ar >= 0.4:
-            moderate.append(f"{v1} & {v2}（r={r:.3f}，{direction}）")
+            moderate.append(f"{v1} & {v2} (r={r:.3f}, {direction})")
         elif ar >= 0.2:
-            weak.append(f"{v1} & {v2}（r={r:.3f}）")
+            weak.append(f"{v1} & {v2} (r={r:.3f})")
     lines = []
-    if strong:
-        lines.append(f"1. [强相关 |r|≥0.7] {'；'.join(strong)} — 变量间线性关系显著，需重点关注，也需警惕多重共线性。")
-    if moderate:
-        lines.append(f"2. [中等相关 0.4≤|r|<0.7] {'；'.join(moderate)} — 存在一定线性关联，可纳入回归模型进一步验证。")
-    if weak:
-        lines.append(f"3. [弱相关 |r|<0.4] {'；'.join(weak)} — 线性关系不明显，可能存在非线性关系或无实质关联。")
-    if not lines:
-        lines.append("1. [相关性概况] 所有变量对相关系数绝对值均低于 0.2 — 变量间线性相关性普遍较弱，建议考虑非线性分析。")
-    lines.append(f"4. [研究意义] 以上最强相关变量对是优先值得深入分析的方向，建议结合业务逻辑判断是否存在因果关系。")
+    if lang == "en":
+        if strong:   lines.append(f"1. [Strong |r|≥0.7] {'; '.join(strong)} — Strong linear relationship; watch for multicollinearity.")
+        if moderate: lines.append(f"2. [Moderate 0.4≤|r|<0.7] {'; '.join(moderate)} — Moderate association; consider including in regression.")
+        if weak:     lines.append(f"3. [Weak |r|<0.4] {'; '.join(weak)} — Weak linear relationship; may have non-linear patterns.")
+        if not lines: lines.append("1. [Overview] All |r| < 0.2 — generally weak linear correlations; consider non-linear analysis.")
+        lines.append("4. [Implication] Strongest correlated pairs are priority candidates for deeper analysis.")
+    else:
+        if strong:   lines.append(f"1. [强相关 |r|≥0.7] {'；'.join(strong)} — 变量间线性关系显著，需警惕多重共线性。")
+        if moderate: lines.append(f"2. [中等相关 0.4≤|r|<0.7] {'；'.join(moderate)} — 存在一定线性关联，可纳入回归模型验证。")
+        if weak:     lines.append(f"3. [弱相关 |r|<0.4] {'；'.join(weak)} — 线性关系不明显，可能存在非线性关系。")
+        if not lines: lines.append("1. [相关性概况] 所有变量对 |r| 均低于 0.2 — 线性相关性普遍较弱，建议考虑非线性分析。")
+        lines.append("4. [研究意义] 以上最强相关变量对是优先值得深入分析的方向，建议结合业务逻辑判断因果关系。")
     return "\n".join(lines)
 
 
 def fallback_chart(y_var: str, mean: float, median: float, skew: float,
-                   scatter_x: str, corr: float) -> str:
+                   scatter_x: str, corr: float, lang: str = "zh") -> str:
+    if lang == "en":
+        skew_desc = "right-skewed" if skew > 0.5 else ("left-skewed" if skew < -0.5 else "approximately symmetric")
+        strength  = "strong" if abs(corr) >= 0.7 else ("moderate" if abs(corr) >= 0.4 else "weak")
+        direction = "positive" if corr > 0 else "negative"
+        return (
+            f"Distribution of {y_var} is {skew_desc} (skew={skew:.2f}), "
+            f"mean={mean:.3f} {'above' if mean > median else 'below'} median={median:.3f}. "
+            f"Scatter shows {strength} {direction} correlation with {scatter_x} (r={corr:.3f}). "
+            f"{'Positive slope — variables move together.' if corr > 0 else 'Negative slope — variables move inversely.'} "
+            f"{'Strong correlation — regression recommended.' if abs(corr) >= 0.5 else 'Weak correlation — interpret trend line cautiously.'}"
+        )
     direction = "正相关" if corr > 0 else "负相关"
     strength  = "强" if abs(corr) >= 0.7 else ("中等" if abs(corr) >= 0.4 else "弱")
     skew_desc = "右偏" if skew > 0.5 else ("左偏" if skew < -0.5 else "近似对称")
@@ -594,25 +605,41 @@ def fallback_chart(y_var: str, mean: float, median: float, skew: float,
 
 
 def fallback_regression(y_var: str, x_vars_str: str, r2: float, adj_r2: float,
-                        rmse: float, sig_vars: str, insig_vars: str, equation: str) -> str:
-    fit_level = "较好（>0.6）" if r2 >= 0.6 else ("一般（0.3~0.6）" if r2 >= 0.3 else "较差（<0.3）")
-    lines = [
-        f"1. [模型拟合] R²={r2:.4f}，调整R²={adj_r2:.4f} — 模型拟合{fit_level}，解释了 {y_var} 约 {r2*100:.1f}% 的变异。",
-        f"2. [预测精度] RMSE={rmse:.4f} — 预测值平均偏差约为 {rmse:.4f}，{'精度较高' if rmse < 0.1 else '存在一定预测误差'}。",
-    ]
-    if sig_vars:
-        lines.append(f"3. [显著影响] 显著自变量（p<0.05）：{sig_vars} — 这些变量对 {y_var} 有统计上可靠的影响。")
+                        rmse: float, sig_vars: str, insig_vars: str, equation: str,
+                        lang: str = "zh") -> str:
+    if lang == "en":
+        fit_level = "good (>0.6)" if r2 >= 0.6 else ("moderate (0.3–0.6)" if r2 >= 0.3 else "weak (<0.3)")
+        lines = [
+            f"1. [Model Fit] R²={r2:.4f}, Adj R²={adj_r2:.4f} — Model fit is {fit_level}, explaining {r2*100:.1f}% of {y_var} variance.",
+            f"2. [Prediction] RMSE={rmse:.4f} — {'High accuracy.' if rmse < 0.1 else 'Some prediction error exists.'}",
+        ]
+        if sig_vars:
+            lines.append(f"3. [Significant] Significant variables (p<0.05): {sig_vars} — statistically reliable effects on {y_var}.")
+        else:
+            lines.append("3. [Significant] No significant variables (p≥0.05) — possible causes: small sample, poor variable selection, or multicollinearity.")
+        if insig_vars:
+            lines.append(f"4. [Non-significant] {insig_vars} — consider removing to simplify model or increasing sample size.")
+        lines.append(f"5. [Conclusion] Regression equation quantifies each variable's effect on {y_var}, providing empirical evidence for the research question.")
     else:
-        lines.append(f"3. [显著影响] 无显著自变量（p≥0.05）— 可能原因：样本量不足、变量选择不当或存在多重共线性。")
-    if insig_vars:
-        lines.append(f"4. [不显著变量] {insig_vars} — 建议考虑移除以简化模型，或扩大样本量后重新检验。")
-    lines.append(f"5. [研究结论] 基于回归方程，可量化各自变量对 {y_var} 的影响大小，为研究问题提供了实证依据。")
+        fit_level = "较好（>0.6）" if r2 >= 0.6 else ("一般（0.3~0.6）" if r2 >= 0.3 else "较差（<0.3）")
+        lines = [
+            f"1. [模型拟合] R²={r2:.4f}，调整R²={adj_r2:.4f} — 模型拟合{fit_level}，解释了 {y_var} 约 {r2*100:.1f}% 的变异。",
+            f"2. [预测精度] RMSE={rmse:.4f} — 预测值平均偏差约为 {rmse:.4f}，{'精度较高' if rmse < 0.1 else '存在一定预测误差'}。",
+        ]
+        if sig_vars:
+            lines.append(f"3. [显著影响] 显著自变量（p<0.05）：{sig_vars} — 这些变量对 {y_var} 有统计上可靠的影响。")
+        else:
+            lines.append("3. [显著影响] 无显著自变量（p≥0.05）— 可能原因：样本量不足、变量选择不当或存在多重共线性。")
+        if insig_vars:
+            lines.append(f"4. [不显著变量] {insig_vars} — 建议考虑移除以简化模型，或扩大样本量后重新检验。")
+        lines.append(f"5. [研究结论] 基于回归方程，可量化各自变量对 {y_var} 的影响大小，为研究问题提供了实证依据。")
     return "\n".join(lines)
 
 
 def fallback_conclusion(question: str, y_var: str, x_vars_str: str,
                         analysis_types: list, r2: float, sig_vars: str,
-                        miss_pct: float, n: int, desc_summary: str) -> str:
+                        miss_pct: float, n: int, desc_summary: str,
+                        lang: str = "zh") -> str:
     has_reg = "回归分析" in analysis_types
     fit_level = "较强" if r2 >= 0.6 else ("一般" if r2 >= 0.3 else "有限")
     lines = ["【核心结论】"]
@@ -652,41 +679,71 @@ SYSTEM_ANALYST = (
 
 def _call_with_fallback(prompt: str, fallback_text: str) -> tuple[str, bool]:
     """调用 API，失败时返回 fallback；返回 (text, is_ai)"""
-    result = call_claude(SYSTEM_ANALYST, prompt)
+    result = call_claude(_get_analyst_system(), prompt)
     if _is_api_error(result):
         return fallback_text, False
     return result, True
 
 @st.cache_data(show_spinner=False)
-def ai_design_plan(question: str, col_info_json: str) -> dict:
-    user_prompt = (
-        f"用户的研究问题：{question}\n\n"
-        f"数据集变量信息（JSON）：\n{col_info_json}\n\n"
-        "请你作为数据分析方案设计师，围绕用户的研究问题，"
-        "从以下五大分析类型中选择合适的组合（不要默认全选，也不要默认使用回归）：\n"
-        "1. 描述性统计\n2. 对比分析\n3. 趋势分析\n4. 相关性分析\n5. 回归分析\n\n"
-        "请严格按以下 JSON 格式输出，不要输出任何其他内容：\n"
-        '{\n'
-        '  "analysis_types": ["类型1", "类型2"],\n'
-        '  "analysis_methods": {\n'
-        '    "类型1": "针对该类型的具体分析方法说明（1-2句，结合数据变量）",\n'
-        '    "类型2": "针对该类型的具体分析方法说明"\n'
-        '  },\n'
-        '  "core_vars": {\n'
-        '    "dependent": "因变量名（若适用，否则填 null）",\n'
-        '    "independent": ["自变量1", "自变量2"],\n'
-        '    "vars_reason": "为什么选这些变量（1-2句）"\n'
-        '  },\n'
-        '  "group_dims": ["分组维度变量名"],\n'
-        '  "group_dims_reason": "为什么按此维度分组，若无分组填 null",\n'
-        '  "charts": [\n'
-        '    {"name": "图表名称", "vars": "涉及变量", "purpose": "这张图回答什么问题"}\n'
-        '  ],\n'
-        '  "use_regression": true或false,\n'
-        '  "regression_reason": "是否建议回归的理由（1-2句）",\n'
-        '  "logic": "整体分析逻辑说明：先做什么、再做什么、最终回答什么问题（3-5句）"\n'
-        '}'
-    )
+def ai_design_plan(question: str, col_info_json: str, lang: str = "zh") -> dict:
+    if lang == "en":
+        user_prompt = (
+            f"User research question: {question}\n\n"
+            f"Dataset variable info (JSON):\n{col_info_json}\n\n"
+            "As a data analysis plan designer, select appropriate analysis types for the question "
+            "(do not select all by default, do not default to regression):\n"
+            "1. Descriptive Stats\n2. Comparison\n3. Trend Analysis\n4. Correlation\n5. Regression\n\n"
+            "Output ONLY the following JSON, no other text:\n"
+            '{{\n'
+            '  "analysis_types": ["Type1", "Type2"],\n'
+            '  "analysis_methods": {{\n'
+            '    "Type1": "specific method description (1-2 sentences)",\n'
+            '    "Type2": "specific method description"\n'
+            '  }},\n'
+            '  "core_vars": {{\n'
+            '    "dependent": "dependent variable name (or null)",\n'
+            '    "independent": ["var1", "var2"],\n'
+            '    "vars_reason": "why these variables (1-2 sentences)"\n'
+            '  }},\n'
+            '  "group_dims": ["grouping variable name"],\n'
+            '  "group_dims_reason": "why group by this dimension, or null",\n'
+            '  "charts": [\n'
+            '    {{"name": "chart name", "vars": "variables used", "purpose": "what question this chart answers"}}\n'
+            '  ],\n'
+            '  "use_regression": true or false,\n'
+            '  "regression_reason": "rationale for regression (1-2 sentences)",\n'
+            '  "logic": "overall analysis logic: what to do first, then what, and what question to answer (3-5 sentences)"\n'
+            '}}'
+        )
+    else:
+        user_prompt = (
+            f"用户的研究问题：{question}\n\n"
+            f"数据集变量信息（JSON）：\n{col_info_json}\n\n"
+            "请你作为数据分析方案设计师，围绕用户的研究问题，"
+            "从以下五大分析类型中选择合适的组合（不要默认全选，也不要默认使用回归）：\n"
+            "1. 描述性统计\n2. 对比分析\n3. 趋势分析\n4. 相关性分析\n5. 回归分析\n\n"
+            "请严格按以下 JSON 格式输出，不要输出任何其他内容：\n"
+            '{{\n'
+            '  "analysis_types": ["类型1", "类型2"],\n'
+            '  "analysis_methods": {{\n'
+            '    "类型1": "针对该类型的具体分析方法说明（1-2句，结合数据变量）",\n'
+            '    "类型2": "针对该类型的具体分析方法说明"\n'
+            '  }},\n'
+            '  "core_vars": {{\n'
+            '    "dependent": "因变量名（若适用，否则填 null）",\n'
+            '    "independent": ["自变量1", "自变量2"],\n'
+            '    "vars_reason": "为什么选这些变量（1-2句）"\n'
+            '  }},\n'
+            '  "group_dims": ["分组维度变量名"],\n'
+            '  "group_dims_reason": "为什么按此维度分组，若无分组填 null",\n'
+            '  "charts": [\n'
+            '    {{"name": "图表名称", "vars": "涉及变量", "purpose": "这张图回答什么问题"}}\n'
+            '  ],\n'
+            '  "use_regression": true或false,\n'
+            '  "regression_reason": "是否建议回归的理由（1-2句）",\n'
+            '  "logic": "整体分析逻辑说明：先做什么、再做什么、最终回答什么问题（3-5句）"\n'
+            '}}'
+        )
     # ai_design_plan 使用独立的 system prompt，不受 SYSTEM_ANALYST 分点格式干扰
     _PLAN_SYSTEM = (
         "你是一位数据分析方案设计师。"
@@ -711,51 +768,88 @@ def ai_design_plan(question: str, col_info_json: str) -> dict:
 
 @st.cache_data(show_spinner=False)
 def ai_desc_interp(question: str, stats_json: str, focus_var: str,
-                   fallback_text: str) -> tuple:
-    prompt = (
-        f"研究问题：{question}\n"
-        f"核心变量：{focus_var}\n"
-        f"描述性统计摘要（JSON）：\n{stats_json}\n\n"
-        "请结合研究问题，严格按以下格式输出描述性统计解读，禁止写长段落：\n\n"
-        "1. [集中趋势] 均值/中位数具体数值 — 说明数据分布是否对称及意义\n"
-        "2. [离散程度] 标准差具体数值 — 说明个体差异大小及其含义\n"
-        "3. [分布形态] 偏度/峰度具体数值 — 说明分布特征及对研究问题的影响\n"
-        "4. [研究意义] 上述特征结合研究问题意味着什么\n\n"
-        "严格格式：数字编号. [标签] 数据描述（具体数值）— 分析解释，每点单独一行，不超过两行。"
-    )
+                   fallback_text: str, lang: str = "zh") -> tuple:
+    if lang == "en":
+        prompt = (
+            f"Research question: {question}\n"
+            f"Key variable: {focus_var}\n"
+            f"Descriptive statistics (JSON):\n{stats_json}\n\n"
+            "Strictly follow this format — no long paragraphs:\n\n"
+            "1. [Central Tendency] Mean/median values — explain distribution symmetry\n"
+            "2. [Dispersion] Std dev value — explain individual variation\n"
+            "3. [Distribution Shape] Skewness/kurtosis — explain shape and research impact\n"
+            "4. [Research Implication] What these features mean for the research question\n\n"
+            "Format: N. [Tag] Data (specific values) — Explanation. One line per point."
+        )
+    else:
+        prompt = (
+            f"研究问题：{question}\n"
+            f"核心变量：{focus_var}\n"
+            f"描述性统计摘要（JSON）：\n{stats_json}\n\n"
+            "请结合研究问题，严格按以下格式输出描述性统计解读，禁止写长段落：\n\n"
+            "1. [集中趋势] 均值/中位数具体数值 — 说明数据分布是否对称及意义\n"
+            "2. [离散程度] 标准差具体数值 — 说明个体差异大小及其含义\n"
+            "3. [分布形态] 偏度/峰度具体数值 — 说明分布特征及对研究问题的影响\n"
+            "4. [研究意义] 上述特征结合研究问题意味着什么\n\n"
+            "严格格式：数字编号. [标签] 数据描述（具体数值）— 分析解释，每点单独一行，不超过两行。"
+        )
     return _call_with_fallback(prompt, fallback_text)
 
 
 @st.cache_data(show_spinner=False)
-def ai_corr_interp(question: str, corr_summary: str, fallback_text: str) -> tuple:
-    prompt = (
-        f"研究问题：{question}\n"
-        f"相关性分析摘要：\n{corr_summary}\n\n"
-        "请严格按以下格式输出相关性解读，禁止写长段落：\n\n"
-        "1. [强相关 |r|≥0.7] 列出变量对和具体 r 值 — 说明关系强度意义\n"
-        "2. [中等相关 0.4≤|r|<0.7] 列出变量对和具体 r 值 — 说明关联程度\n"
-        "3. [弱/无相关 |r|<0.4] 列出变量对和具体 r 值 — 说明线性关系不明显\n"
-        "4. [研究意义] 相关性对回答研究问题最关键的启示\n\n"
-        "严格格式：数字编号. [标签] 数据描述（具体数值）— 分析解释，每点单独一行。\n"
-        "若某类别无变量对，该点跳过，编号重排。"
-    )
+def ai_corr_interp(question: str, corr_summary: str, fallback_text: str, lang: str = "zh") -> tuple:
+    if lang == "en":
+        prompt = (
+            f"Research question: {question}\n"
+            f"Correlation analysis summary:\n{corr_summary}\n\n"
+            "Strictly follow this format — no long paragraphs:\n\n"
+            "1. [Strong |r|≥0.7] List variable pairs and r values — explain strength\n"
+            "2. [Moderate 0.4≤|r|<0.7] List pairs and r values — explain association\n"
+            "3. [Weak |r|<0.4] List pairs and r values — explain weak linear relationship\n"
+            "4. [Research Implication] Key insight from correlation for the research question\n\n"
+            "Format: N. [Tag] Data (specific values) — Explanation. Skip empty categories."
+        )
+    else:
+        prompt = (
+            f"研究问题：{question}\n"
+            f"相关性分析摘要：\n{corr_summary}\n\n"
+            "请严格按以下格式输出相关性解读，禁止写长段落：\n\n"
+            "1. [强相关 |r|≥0.7] 列出变量对和具体 r 值 — 说明关系强度意义\n"
+            "2. [中等相关 0.4≤|r|<0.7] 列出变量对和具体 r 值 — 说明关联程度\n"
+            "3. [弱/无相关 |r|<0.4] 列出变量对和具体 r 值 — 说明线性关系不明显\n"
+            "4. [研究意义] 相关性对回答研究问题最关键的启示\n\n"
+            "严格格式：数字编号. [标签] 数据描述（具体数值）— 分析解释，每点单独一行。\n"
+            "若某类别无变量对，该点跳过，编号重排。"
+        )
     return _call_with_fallback(prompt, fallback_text)
 
 
 @st.cache_data(show_spinner=False)
 def ai_chart_interp(question: str, y_var: str, mean: float, median: float,
                     skew: float, scatter_x: str, corr: float,
-                    fallback_text: str) -> tuple:
-    prompt = (
-        f"研究问题：{question}\n"
-        f"变量 {y_var}：均值={mean:.3f}，中位数={median:.3f}，偏度={skew:.3f}。\n"
-        f"散点图：{y_var} 与 {scatter_x} 的 Pearson 相关系数 = {corr:.3f}。\n\n"
-        "请严格按以下格式输出图表解读，禁止写长段落：\n\n"
-        f"1. [分布形态] {y_var} 偏度={skew:.3f}，均值与中位数对比 — 说明分布是否对称及含义\n"
-        f"2. [相关关系] {y_var} 与 {scatter_x} 的 r={corr:.3f} — 说明关联强度、方向及趋势含义\n"
-        "3. [初步判断] 基于图形，对研究问题能得出的初步结论\n\n"
-        "严格格式：数字编号. [标签] 数据描述（具体数值）— 分析解释，每点单独一行。"
-    )
+                    fallback_text: str, lang: str = "zh") -> tuple:
+    if lang == "en":
+        prompt = (
+            f"Research question: {question}\n"
+            f"Variable {y_var}: mean={mean:.3f}, median={median:.3f}, skewness={skew:.3f}.\n"
+            f"Scatter plot: Pearson r between {y_var} and {scatter_x} = {corr:.3f}.\n\n"
+            "Strictly follow this format — no long paragraphs:\n\n"
+            f"1. [Distribution] {y_var} skewness={skew:.3f}, mean vs median — explain symmetry\n"
+            f"2. [Correlation] {y_var} vs {scatter_x} r={corr:.3f} — explain strength and direction\n"
+            "3. [Preliminary Conclusion] Initial conclusion for the research question from chart\n\n"
+            "Format: N. [Tag] Data (specific values) — Explanation. One line per point."
+        )
+    else:
+        prompt = (
+            f"研究问题：{question}\n"
+            f"变量 {y_var}：均值={mean:.3f}，中位数={median:.3f}，偏度={skew:.3f}。\n"
+            f"散点图：{y_var} 与 {scatter_x} 的 Pearson 相关系数 = {corr:.3f}。\n\n"
+            "请严格按以下格式输出图表解读，禁止写长段落：\n\n"
+            f"1. [分布形态] {y_var} 偏度={skew:.3f}，均值与中位数对比 — 说明分布是否对称及含义\n"
+            f"2. [相关关系] {y_var} 与 {scatter_x} 的 r={corr:.3f} — 说明关联强度、方向及趋势含义\n"
+            "3. [初步判断] 基于图形，对研究问题能得出的初步结论\n\n"
+            "严格格式：数字编号. [标签] 数据描述（具体数值）— 分析解释，每点单独一行。"
+        )
     return _call_with_fallback(prompt, fallback_text)
 
 
@@ -763,23 +857,40 @@ def ai_chart_interp(question: str, y_var: str, mean: float, median: float,
 def ai_reg_interp(question: str, y_var: str, x_vars_str: str,
                   r2: float, adj_r2: float, rmse: float,
                   sig_vars: str, insig_vars: str, equation: str,
-                  fallback_text: str) -> tuple:
-    prompt = (
-        f"研究问题：{question}\n"
-        f"因变量：{y_var}，自变量：{x_vars_str}\n"
-        f"R²={r2:.4f}，调整 R²={adj_r2:.4f}，RMSE={rmse:.4f}\n"
-        f"显著变量（p<0.05）：{sig_vars or '无'}\n"
-        f"不显著变量：{insig_vars or '无'}\n"
-        f"回归方程：{equation}\n\n"
-        "请严格按以下格式输出回归解读，禁止写长段落：\n\n"
-        f"1. [模型拟合] R²={r2:.4f}，调整R²={adj_r2:.4f} — 说明模型解释了多少变异，拟合程度评价\n"
-        f"2. [预测精度] RMSE={rmse:.4f} — 说明预测误差大小及实际意义\n"
-        "3. [显著影响] 列出显著变量（p<0.05）及系数方向 — 说明各变量对因变量的具体影响\n"
-        "4. [不显著变量] 列出不显著变量（p≥0.05）— 分析可能原因\n"
-        "5. [研究结论] 回归结果对回答研究问题的直接意义\n\n"
-        "严格格式：数字编号. [标签] 数据描述（具体数值）— 分析解释，每点单独一行。\n"
-        "若某类别为空，该点跳过，编号重排。"
-    )
+                  fallback_text: str, lang: str = "zh") -> tuple:
+    if lang == "en":
+        prompt = (
+            f"Research question: {question}\n"
+            f"Dependent: {y_var}, Independent: {x_vars_str}\n"
+            f"R²={r2:.4f}, Adj R²={adj_r2:.4f}, RMSE={rmse:.4f}\n"
+            f"Significant (p<0.05): {sig_vars or 'None'}\n"
+            f"Not significant: {insig_vars or 'None'}\n"
+            f"Equation: {equation}\n\n"
+            "Strictly follow this format — no long paragraphs:\n\n"
+            f"1. [Model Fit] R²={r2:.4f}, Adj R²={adj_r2:.4f} — explain variance explained and fit quality\n"
+            f"2. [Prediction Accuracy] RMSE={rmse:.4f} — explain prediction error magnitude\n"
+            "3. [Significant Effects] List significant vars and coefficient direction — explain impact\n"
+            "4. [Non-significant Vars] List non-significant vars — discuss possible reasons\n"
+            "5. [Research Conclusion] What regression results mean for the research question\n\n"
+            "Format: N. [Tag] Data (specific values) — Explanation. Skip empty categories."
+        )
+    else:
+        prompt = (
+            f"研究问题：{question}\n"
+            f"因变量：{y_var}，自变量：{x_vars_str}\n"
+            f"R²={r2:.4f}，调整 R²={adj_r2:.4f}，RMSE={rmse:.4f}\n"
+            f"显著变量（p<0.05）：{sig_vars or '无'}\n"
+            f"不显著变量：{insig_vars or '无'}\n"
+            f"回归方程：{equation}\n\n"
+            "请严格按以下格式输出回归解读，禁止写长段落：\n\n"
+            f"1. [模型拟合] R²={r2:.4f}，调整R²={adj_r2:.4f} — 说明模型解释了多少变异，拟合程度评价\n"
+            f"2. [预测精度] RMSE={rmse:.4f} — 说明预测误差大小及实际意义\n"
+            "3. [显著影响] 列出显著变量（p<0.05）及系数方向 — 说明各变量对因变量的具体影响\n"
+            "4. [不显著变量] 列出不显著变量（p≥0.05）— 分析可能原因\n"
+            "5. [研究结论] 回归结果对回答研究问题的直接意义\n\n"
+            "严格格式：数字编号. [标签] 数据描述（具体数值）— 分析解释，每点单独一行。\n"
+            "若某类别为空，该点跳过，编号重排。"
+        )
     return _call_with_fallback(prompt, fallback_text)
 
 
@@ -787,35 +898,560 @@ def ai_reg_interp(question: str, y_var: str, x_vars_str: str,
 def ai_conclusion(question: str, y_var: str, x_vars_str: str,
                   analysis_types_str: str, r2: float, sig_vars: str,
                   miss_pct: float, n: int, desc_summary: str,
-                  fallback_text: str) -> tuple:
-    prompt = (
-        f"用户最初的研究问题：{question}\n\n"
-        f"分析摘要：\n"
-        f"- 样本量 {n}，缺失率 {miss_pct:.1f}%\n"
-        f"- 执行的分析类型：{analysis_types_str}\n"
-        f"- 核心变量：{y_var}（自变量：{x_vars_str}）\n"
-        f"- 回归模型 R²={r2:.4f}\n"
-        f"- 显著自变量：{sig_vars or '无'}\n"
-        f"- 描述性统计摘要：{desc_summary}\n\n"
-        "请严格按以下三层结构输出总体结论，每层用标题行分隔，禁止写长段落：\n\n"
-        "【核心结论】\n"
-        "1. 直接回答研究问题（一句话，结合关键数据和具体数值）\n\n"
-        "【关键发现】\n"
-        "1. 最重要的分析发现（含具体数值）— 说明意义\n"
-        "2. 第二重要发现（含具体数值）— 说明意义\n"
-        "3. 数据质量或局限性提醒（缺失率、样本量等具体数值）\n\n"
-        "【建议】\n"
-        "1. 针对研究问题的第一条具体可执行建议\n"
-        "2. 针对研究问题的第二条具体可执行建议\n"
-        "3. 后续分析方向建议（如增加变量、非线性模型等）\n\n"
-        "严格格式：数字编号. 内容（每点单独一行，不超过两行，含具体数值）"
-    )
-
-    result = call_claude(SYSTEM_ANALYST, prompt, max_tokens=1400)
+                  fallback_text: str, lang: str = "zh") -> tuple:
+    if lang == "en":
+        prompt = (
+            f"Original research question: {question}\n\n"
+            f"Analysis summary:\n"
+            f"- Sample size {n}, missing rate {miss_pct:.1f}%\n"
+            f"- Analysis types: {analysis_types_str}\n"
+            f"- Core variables: {y_var} (independent: {x_vars_str})\n"
+            f"- Regression R²={r2:.4f}\n"
+            f"- Significant variables: {sig_vars or 'None'}\n"
+            f"- Descriptive summary: {desc_summary}\n\n"
+            "Output the overall conclusion in three sections, no long paragraphs:\n\n"
+            "[Core Conclusion]\n"
+            "1. Directly answer the research question (one sentence with key data)\n\n"
+            "[Key Findings]\n"
+            "1. Most important finding (with values) — significance\n"
+            "2. Second finding (with values) — significance\n"
+            "3. Data quality or limitation reminder (missing rate, sample size)\n\n"
+            "[Recommendations]\n"
+            "1. First actionable recommendation for the research question\n"
+            "2. Second actionable recommendation\n"
+            "3. Future analysis directions\n\n"
+            "Format: N. Content (one line per point, max 2 lines, include specific values)"
+        )
+    else:
+        prompt = (
+            f"用户最初的研究问题：{question}\n\n"
+            f"分析摘要：\n"
+            f"- 样本量 {n}，缺失率 {miss_pct:.1f}%\n"
+            f"- 执行的分析类型：{analysis_types_str}\n"
+            f"- 核心变量：{y_var}（自变量：{x_vars_str}）\n"
+            f"- 回归模型 R²={r2:.4f}\n"
+            f"- 显著自变量：{sig_vars or '无'}\n"
+            f"- 描述性统计摘要：{desc_summary}\n\n"
+            "请严格按以下三层结构输出总体结论，每层用标题行分隔，禁止写长段落：\n\n"
+            "【核心结论】\n"
+            "1. 直接回答研究问题（一句话，结合关键数据和具体数值）\n\n"
+            "【关键发现】\n"
+            "1. 最重要的分析发现（含具体数值）— 说明意义\n"
+            "2. 第二重要发现（含具体数值）— 说明意义\n"
+            "3. 数据质量或局限性提醒（缺失率、样本量等具体数值）\n\n"
+            "【建议】\n"
+            "1. 针对研究问题的第一条具体可执行建议\n"
+            "2. 针对研究问题的第二条具体可执行建议\n"
+            "3. 后续分析方向建议（如增加变量、非线性模型等）\n\n"
+            "严格格式：数字编号. 内容（每点单独一行，不超过两行，含具体数值）"
+        )
+    result = call_claude(_get_analyst_system(), prompt, max_tokens=1400)
     if _is_api_error(result):
         return fallback_text, False
     return result, True
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 多语言翻译字典 (zh / en)
+# ══════════════════════════════════════════════════════════════════════════════
+_TRANSLATIONS = {
+    "zh": {
+        "app_title":     "AI 数据分析工具",
+        "app_subtitle":  "问题驱动 · AI 协作 · 数据与解读同步输出",
+        "lang_btn":      "🌐 English",
+        "step_labels":   [("01","问题导入"),("02","方案设计与确认"),
+                          ("03","分析结果与解释"),("04","总体结论")],
+        "s1_title":      "问题导入",
+        "s1_desc":       "在开始分析之前，请先描述你想研究的问题或目标。<br>明确的问题能帮助 AI 推荐更合适的变量和分析方法，让后续结论更有针对性。",
+        "s1_q_label":    "你的研究问题 / 分析目标",
+        "s1_placeholder":"例如：哪些因素影响学生的期末成绩？\n例如：房屋面积和地段对房价有多大影响？\n例如：员工工作年限与薪资之间是否存在显著关系？",
+        "s1_upload":     "📂 上传数据文件",
+        "s1_upload_hint":"支持 CSV（UTF-8 / GBK）和 Excel（.xlsx / .xls）",
+        "s1_next":       "下一步：AI 方案设计 →",
+        "s1_err_q":      "请先输入你的研究问题。",
+        "s1_err_file":   "请上传数据文件。",
+        "s1_err_num":    "数据中没有可分析的数值列，请检查文件内容。",
+        "s2_title":      "分析方案设计与确认",
+        "s2_q_prefix":   "🔍 研究问题：",
+        "s2_overview":   "📋 数据概览（点击展开）",
+        "s2_ov_n":       "样本量", "s2_ov_cols":"变量数", "s2_ov_miss":"缺失率",
+        "s2_plan_hdr":   "AI 方案推荐",
+        "s2_plan_err":   "AI 方案生成遇到解析问题，请在下方手动配置变量后继续。",
+        "s2_plan_raw":   "查看原始 AI 输出",
+        "s2_adjust_hdr": "调整与确认",
+        "s2_adjust_tip": "AI 已根据你的问题预填了以下配置，你可以直接确认，也可以修改后再继续。",
+        "s2_types_label":"分析类型（可多选，选择后下方变量配置随之变化）",
+        "s2_types_help": "所选类型直接决定执行哪种分析，无需额外勾选",
+        "s2_all_types":  ["描述性统计","对比分析","趋势分析","相关性分析","回归分析"],
+        "s2_back":       "← 返回修改问题",
+        "s2_regen":      "↺ 重新生成方案",
+        "s2_confirm":    "✓ 确认方案，开始分析 →",
+        "s2_err_type":   "请至少选择一种分析类型。",
+        "s3_title":      "分析结果与解释",
+        "s3_q_prefix":   "🔍 研究问题：",
+        "s3_sec_a":      "A · 描述性统计",
+        "s3_sec_b":      "B · 对比分析", "s3_sec_b2":"B · 趋势分析", "s3_sec_b3":"B · 对比分析 / 趋势分析",
+        "s3_sec_c":      "C · 相关性分析",
+        "s3_sec_d":      "D · 回归分析",
+        "s3_no_target":  "未配置目标变量，请返回方案步骤选择。",
+        "s3_no_corr":    "相关性分析需要至少 2 个变量，请返回方案步骤配置。",
+        "s3_no_reg":     "回归分析需要配置因变量和自变量，请返回方案步骤。",
+        "s3_spin_desc":  "✦ 正在生成描述性统计解读…",
+        "s3_spin_corr":  "✦ 正在生成相关性解读…",
+        "s3_spin_chart": "✦ 正在生成图表趋势解读…",
+        "s3_spin_reg":   "✦ 正在生成回归结果解读…",
+        "s3_lbl_desc":   "描述性统计解读",
+        "s3_lbl_corr":   "相关性分析解读",
+        "s3_lbl_chart":  "分布形态 · 趋势判断",
+        "s3_lbl_reg":    "回归结果解读",
+        "s3_model_sum":  "模型摘要",
+        "s3_reg_coef":   "回归系数",
+        "s3_desc_cols":  ["样本量","均值","标准差","最小值","25%分位","中位数","75%分位","最大值","偏度","峰度"],
+        "s3_reg_cols":   ["变量","系数","标准误","t 值","p 值","95% 置信区间"],
+        "s3_resid_ttl":  "残差 vs 拟合值", "s3_resid_x":"拟合值", "s3_resid_y":"残差",
+        "s3_qq_ttl":     "Q-Q 图", "s3_qq_x":"理论分位数", "s3_qq_y":"样本分位数",
+        "s3_back":       "← 返回调整方案",
+        "s3_next":       "下一步：总体结论与建议 →",
+        "s3_r2":"R²","s3_adj_r2":"调整 R²","s3_rmse":"RMSE","s3_n_eff":"有效样本量",
+        "s4_title":      "总体结论与建议",
+        "s4_stat_types": "已执行分析","s4_stat_n":"有效样本量",
+        "s4_stat_r2":    "回归 R²","s4_stat_sig":"显著变量",
+        "s4_no_reg":     "未执行回归",
+        "s4_spinner":    "✦ 正在生成总体结论与建议…",
+        "s4_conc_title": "📝 总体结论与建议",
+        "s4_ai_gen":     "（AI 生成）","s4_local_gen":"（本地规则生成）",
+        "s4_rpt_title":  "📄 分析报告生成与下载",
+        "s4_rpt_hint":   "系统将汇总本次所有分析结果，生成一份结构化分析报告，支持 Word (.docx) 格式下载。",
+        "s4_gen_btn":    "✦ 生成分析报告",
+        "s4_gen_spin":   "✦ 正在生成结构化报告…",
+        "s4_gen_done":   "报告生成完成，请点击下方按钮下载。",
+        "s4_preview":    "📋 报告预览（点击展开）",
+        "s4_dl_word":    "⬇ 下载 Word 报告 (.docx)",
+        "s4_dl_txt":     "⬇ 下载纯文本报告 (.txt)",
+        "s4_no_docx":    "需要安装 python-docx：`pip install python-docx`",
+        "s4_back":       "← 返回查看分析详情",
+        "s4_restart":    "↺ 重新开始新分析",
+        "s4_rpt_cover":  "数据分析报告",
+        "s4_rpt_q":      "研究问题：",
+        "s4_rpt_date":   "生成时间：",
+        "s4_rpt_annex":  "附录：分析图表",
+        "s4_rpt_fig":    "图 ",
+        "corr_heatmap":  "Pearson 相关系数热力图",
+        "ai_label":      "✦ AI 解读",
+        "rule_label":    "✦ 规则解读",
+        "card_types":    "分析类型",
+        "card_vars":     "核心变量",
+        "card_dep":      "因变量：",
+        "card_indep":    "自变量：",
+        "card_group":    "分组维度",
+        "card_no_group": "无",
+        "card_no_group_reason": "无需分组",
+        "card_charts":   "推荐图表",
+        "card_reg":      "是否建议回归",
+        "card_reg_yes":  "建议回归",
+        "card_reg_no":   "暂不需要",
+        "card_logic":    "分析逻辑说明",
+        "s2_desc_vars":  "📋 描述性统计 · 分析变量",
+        "s2_desc_sel":   "选择参与描述性统计的变量",
+        "s2_corr_vars":  "🔗 相关性分析 · 参与变量",
+        "s2_corr_sel":   "参与相关性分析的变量（建议 2-8 个数值变量）",
+        "s2_corr_help":  "将计算所选变量之间的两两 Pearson 相关系数并绘制热力图",
+        "s2_reg_vars":   "📈 回归分析 · 变量配置",
+        "s2_dep_var":    "因变量（Y）",
+        "s2_indep_vars": "自变量（X）",
+        "s2_scatter_sel":"散点图：选择与因变量对比展示的自变量",
+        "card_ai_plan":  "AI 方案设计",
+        "s2_spinner":    "✦ AI 正在设计分析方案，请稍候…",
+        # ── 图表配置 UI 标签 ──
+        "chart_x_cat":       "X 轴（分类变量）",
+        "chart_y_num":       "Y 轴（数值变量）",
+        "chart_x_num":       "X 轴（数值变量，条形长度）",
+        "chart_y_cat":       "Y 轴（分类变量，横轴类别）",
+        "chart_group_opt":   "分组变量（可选）",
+        "chart_no_group":    "（不分组）",
+        "chart_x_time":      "X 轴（时间/序列）",
+        "chart_y_multi":     "Y 变量（数值，可多选≤4）",
+        "chart_warn_nocat":  "柱状图需要分类型 X 轴，当前数据集无明显分类变量。",
+        "chart_warn_nocat2": "⚠️ 无纯分类列，已候选低唯一值数值列",
+        "chart_warn_notime": "⚠️ 未检测到时间变量，请确认 X 轴是否为有序序列",
+        "chart_warn_line4":  "折线图最多 4 条线，已截取前 4 个。",
+        "chart_warn_sc2":    "散点图需要至少 2 个数值变量。",
+        "chart_warn_bub3":   "气泡图需要至少 3 个数值变量（X / Y / 气泡大小）。",
+        "chart_warn_min1":   "折线图至少需要 1 个 Y 变量。",
+        "chart_x_num2":      "X 变量（数值）",
+        "chart_y_num2":      "Y 变量（数值，须与 X 不同）",
+        "chart_bubble_x":    "X 变量（数值）",
+        "chart_bubble_y":    "Y 变量（数值）",
+        "chart_bubble_size": "气泡大小变量（数值）",
+        "chart_pie_label":   "类别变量（各扇区名称）",
+        "chart_pie_value":   "数值变量（各扇区大小）",
+        "chart_donut_label": "类别变量",
+        "chart_donut_value": "数值变量",
+        "chart_box_num":     "数值变量（必选）",
+        "chart_box_grp":     "分组变量（可选，仅分类/低基数列）",
+        "chart_violin_num":  "数值变量（必选）",
+        "chart_violin_grp":  "分组变量（可选）",
+        "chart_radar_vars":  "维度变量（数值，选 3-8 个）",
+        "chart_radar_grp":   "分组变量（可选，用于多组对比）",
+        "chart_rank_var":    "排序变量（数值变量）",
+        "chart_combo_x":     "X 轴（分类/时间）",
+        "chart_combo_bar":   "柱状 Y（数值）",
+        "chart_combo_line":  "折线 Y（数值，双轴）",
+        "chart_sel_label":   "选择图表类型（可多选，已根据分析类型和问题自动推荐）",
+        "chart_sel_help":    "选择后下方自动显示该图表所需的变量配置",
+        "s2_chart_title":    "图表选择（Visualization Configuration）",
+        "s2_chart_hint":     "先选图表类型，系统将自动约束可选变量，避免无效组合。",
+        # ── Step 2 变量组 ──
+        "s2_group_detect":   "系统从 {n} 个数值变量中检测到 <b style='color:#dde2f0;'>{g} 个变量组</b>，选择一组后将自动纳入该组全部变量：",
+        "s2_group_sel":      "选择变量组（可多选，每组所有变量自动纳入对比）",
+        "s2_group_extra":    "额外追加单个变量（可选）",
+        "s2_group_added":    "✓ 已纳入 {n} 个变量：{vars}",
+        "s2_pair_hint":      "未检测到明显分组结构，请手动选择要对比的变量（至少 2 个）：",
+        "s2_pair_a":         "对比变量 A",
+        "s2_pair_b":         "对比变量 B",
+        "s2_pair_extra":     "额外追加更多对比变量（可选）",
+        "s2_group_var":      "分组维度（Group by，可选）",
+        "s2_no_group":       "（不分组）",
+        "s2_time_var":       "时间变量（可选，用于趋势图）",
+        "s2_no_time":        "（不使用）",
+        # ── Step 3 图表副标题 ──
+        "ct_bar":       "柱状图",
+        "ct_hbar":      "条形图",
+        "ct_gbar":      "分组柱状图",
+        "ct_line":      "折线图",
+        "ct_area":      "面积图",
+        "ct_scatter":   "散点图",
+        "ct_bubble":    "气泡图",
+        "ct_pie":       "饼图",
+        "ct_donut":     "圆环图",
+        "ct_box":       "箱线图",
+        "ct_violin":    "小提琴图",
+        "ct_radar":     "雷达图",
+        "ct_heatmap":   "热力图",
+        "ct_rank":      "变化排序图",
+        "ct_combo":     "组合图",
+        "ct_by":        "按",
+        "ct_grouped":   "（分组：",
+        "ct_trend":     "趋势",
+        "ct_share":     "占比",
+        "ct_vs":        "vs",
+        "ct_unified":   "统一",
+        "ct_fail":      "绘制失败：",
+        "ct_mean_cmp":  "变量对比",
+        "ct_mean_y":    "均值（±标准差）",
+        "ct_mean_title":"各变量均值对比",
+        "ct_min2":      "请至少选择 2 个变量以生成对比图。",
+        "s3_model_r2":  ["R²","调整 R²","RMSE","有效样本量"],
+        # ── Step 4 ──
+        "s4_word_fail": "Word 生成失败：",
+        "sig_label":     "个显著",
+        "ov_col_name":   "变量名",
+        "ov_col_type":   "类型",
+        "ov_col_uniq":   "唯一值",
+        "ov_col_miss":   "缺失",
+        "chart_violin_sub": "小提琴图",
+        "chart_radar_sub":  "雷达图",
+        "chart_heat_sub":   "热力图 · 相关矩阵",
+        "chart_combo_sub":  "组合图",
+        "chart_scatter_sub":"散点图",
+        "chart_dist_sub":   "分布",
+        "s3_no_sample":     "有效样本量不足，无法运行回归。",
+        "ct_scatter_vs":    "散点图",
+        "chart_warn_radar3":  "雷达图至少需要 3 个维度变量。",
+        "chart_heat_caption": "热力图将自动使用已选数值变量的 Pearson 相关矩阵，或指定行/列变量。",
+        "chart_heat_sel":     "参与热力图的数值变量（留空则自动）",
+        "chart_warn_sc_xy":   "散点图需同时选择 X 和 Y 变量。",
+        "chart_warn_radar_e": "雷达图需要至少 3 个维度变量。",
+        "chart_rank_x":  "样本排序（从小到大）",
+        "chart_mean":    "均值",
+        "chart_freq":    "频数",
+        "chart_dist":    "分布直方图",
+        "chart_trend":   "趋势线",
+        "chart_median":  "中位数",
+        "chart_rules": {
+            "柱状图":"X: 分类变量  |  Y: 数值变量",
+            "条形图":"Y: 分类变量  |  X: 数值变量（横向）",
+            "分组柱状图":"X: 分类  |  Y: 数值  |  分组: 可选分类",
+            "折线图":"X: 时间/序列（优先）  |  Y: 数值（可多选）",
+            "面积图":"X: 时间/序列  |  Y: 数值（可多选）",
+            "散点图":"X: 数值  |  Y: 数值（须不同列）",
+            "气泡图":"X: 数值  |  Y: 数值  |  气泡大小: 第三数值",
+            "饼图":"分类变量: 类别  |  数值变量: 各类别值",
+            "圆环图":"分类变量: 类别  |  数值变量: 各类别值",
+            "箱线图":"数值变量: 必选  |  分组变量: 可选分类",
+            "小提琴图":"数值变量: 必选  |  分组变量: 可选分类",
+            "雷达图":"维度变量: 3-8个数值  |  分组变量: 可选",
+            "热力图":"数值变量（自动生成相关矩阵）",
+            "变化排序图":"排序变量: 数值变量",
+            "组合图（柱+线）":"X: 分类/时间  |  柱Y: 数值  |  线Y: 数值",
+        },
+        "prompt_lang":   "中文",
+    },
+    "en": {
+        "app_title":     "AI Data Analysis Tool",
+        "app_subtitle":  "Question-Driven · AI-Assisted · Data & Insights Unified",
+        "lang_btn":      "🌐 中文",
+        "step_labels":   [("01","Problem Input"),("02","Plan Design"),
+                          ("03","Analysis Results"),("04","Conclusion")],
+        "s1_title":      "Problem Input",
+        "s1_desc":       "Describe the question or goal you want to explore.<br>A clear question helps AI recommend better variables and analysis methods.",
+        "s1_q_label":    "Your Research Question / Analysis Goal",
+        "s1_placeholder":"e.g. What factors affect students' exam scores?\ne.g. How do area and location influence house prices?\ne.g. Is there a significant relationship between tenure and salary?",
+        "s1_upload":     "📂 Upload Data File",
+        "s1_upload_hint":"Supports CSV (UTF-8 / GBK) and Excel (.xlsx / .xls)",
+        "s1_next":       "Next: AI Plan Design →",
+        "s1_err_q":      "Please enter your research question first.",
+        "s1_err_file":   "Please upload a data file.",
+        "s1_err_num":    "No numeric columns found. Please check your file.",
+        "s2_title":      "Plan Design & Confirmation",
+        "s2_q_prefix":   "🔍 Research Question: ",
+        "s2_overview":   "📋 Data Overview (click to expand)",
+        "s2_ov_n":       "Sample Size","s2_ov_cols":"Variables","s2_ov_miss":"Missing Rate",
+        "s2_plan_hdr":   "AI Recommended Plan",
+        "s2_plan_err":   "AI plan parsing failed. Please configure variables manually below.",
+        "s2_plan_raw":   "View Raw AI Output",
+        "s2_adjust_hdr": "Adjust & Confirm",
+        "s2_adjust_tip": "AI has pre-filled the configuration below. Confirm or modify before continuing.",
+        "s2_types_label":"Analysis Types (multi-select, variable config updates accordingly)",
+        "s2_types_help": "Selected types directly drive what analysis is executed",
+        "s2_all_types":  ["Descriptive Stats","Comparison","Trend Analysis","Correlation","Regression"],
+        "s2_back":       "← Back to Edit Question",
+        "s2_regen":      "↺ Regenerate Plan",
+        "s2_confirm":    "✓ Confirm Plan & Start Analysis →",
+        "s2_err_type":   "Please select at least one analysis type.",
+        "s3_title":      "Analysis Results & Interpretation",
+        "s3_q_prefix":   "🔍 Research Question: ",
+        "s3_sec_a":      "A · Descriptive Statistics",
+        "s3_sec_b":      "B · Comparison Analysis","s3_sec_b2":"B · Trend Analysis","s3_sec_b3":"B · Comparison / Trend Analysis",
+        "s3_sec_c":      "C · Correlation Analysis",
+        "s3_sec_d":      "D · Regression Analysis",
+        "s3_no_target":  "No target variables configured. Please go back to plan step.",
+        "s3_no_corr":    "Correlation requires at least 2 variables. Please go back.",
+        "s3_no_reg":     "Regression requires dependent and independent variables. Please go back.",
+        "s3_spin_desc":  "✦ Generating descriptive statistics interpretation…",
+        "s3_spin_corr":  "✦ Generating correlation interpretation…",
+        "s3_spin_chart": "✦ Generating chart trend interpretation…",
+        "s3_spin_reg":   "✦ Generating regression interpretation…",
+        "s3_lbl_desc":   "Descriptive Statistics",
+        "s3_lbl_corr":   "Correlation Analysis",
+        "s3_lbl_chart":  "Distribution & Trend",
+        "s3_lbl_reg":    "Regression Results",
+        "s3_model_sum":  "Model Summary",
+        "s3_reg_coef":   "Regression Coefficients",
+        "s3_desc_cols":  ["Count","Mean","Std","Min","25%","Median","75%","Max","Skew","Kurt"],
+        "s3_reg_cols":   ["Variable","Coef","Std Err","t","p-value","95% CI"],
+        "s3_resid_ttl":  "Residuals vs Fitted","s3_resid_x":"Fitted Values","s3_resid_y":"Residuals",
+        "s3_qq_ttl":     "Q-Q Plot","s3_qq_x":"Theoretical Quantiles","s3_qq_y":"Sample Quantiles",
+        "s3_back":       "← Back to Adjust Plan",
+        "s3_next":       "Next: Overall Conclusion →",
+        "s3_r2":"R²","s3_adj_r2":"Adj R²","s3_rmse":"RMSE","s3_n_eff":"Sample Size",
+        "s4_title":      "Overall Conclusion & Recommendations",
+        "s4_stat_types": "Analysis Executed","s4_stat_n":"Sample Size",
+        "s4_stat_r2":    "Model R²","s4_stat_sig":"Significant Vars",
+        "s4_no_reg":     "No regression",
+        "s4_spinner":    "✦ Generating overall conclusion…",
+        "s4_conc_title": "📝 Overall Conclusion & Recommendations",
+        "s4_ai_gen":     "(AI Generated)","s4_local_gen":"(Rule-Based)",
+        "s4_rpt_title":  "📄 Report Generation & Download",
+        "s4_rpt_hint":   "Compile all analysis results into a structured report, downloadable as Word (.docx).",
+        "s4_gen_btn":    "✦ Generate Analysis Report",
+        "s4_gen_spin":   "✦ Generating structured report…",
+        "s4_gen_done":   "Report generated. Click below to download.",
+        "s4_preview":    "📋 Report Preview (click to expand)",
+        "s4_dl_word":    "⬇ Download Word Report (.docx)",
+        "s4_dl_txt":     "⬇ Download Plain Text Report (.txt)",
+        "s4_no_docx":    "python-docx required: `pip install python-docx`",
+        "s4_back":       "← Back to Analysis Details",
+        "s4_restart":    "↺ Start New Analysis",
+        "s4_rpt_cover":  "Data Analysis Report",
+        "s4_rpt_q":      "Research Question: ",
+        "s4_rpt_date":   "Generated: ",
+        "s4_rpt_annex":  "Appendix: Analysis Charts",
+        "s4_rpt_fig":    "Figure ",
+        "corr_heatmap":  "Pearson Correlation Heatmap",
+        "ai_label":      "✦ AI Insight",
+        "rule_label":    "✦ Rule-Based Insight",
+        "card_types":    "Analysis Types",
+        "card_vars":     "Core Variables",
+        "card_dep":      "Dependent: ",
+        "card_indep":    "Independent: ",
+        "card_group":    "Group Dimension",
+        "card_no_group": "None",
+        "card_no_group_reason": "No grouping needed",
+        "card_charts":   "Recommended Charts",
+        "card_reg":      "Regression Recommended",
+        "card_reg_yes":  "Recommend",
+        "card_reg_no":   "Not needed",
+        "card_logic":    "Analysis Logic",
+        "s2_desc_vars":  "📋 Descriptive Stats · Variables",
+        "s2_desc_sel":   "Select variables for descriptive statistics",
+        "s2_corr_vars":  "🔗 Correlation · Variables",
+        "s2_corr_sel":   "Variables for correlation (2–8 numeric recommended)",
+        "s2_corr_help":  "Pairwise Pearson coefficients and heatmap",
+        "s2_reg_vars":   "📈 Regression · Variable Config",
+        "s2_dep_var":    "Dependent Variable (Y)",
+        "s2_indep_vars": "Independent Variables (X)",
+        "s2_scatter_sel":"Scatter Plot: select X variable to compare with Y",
+        "card_ai_plan":  "AI Plan Design",
+        "s2_spinner":    "✦ Generating analysis plan, please wait…",
+        # ── Chart config UI labels ──
+        "chart_x_cat":       "X Axis (Category)",
+        "chart_y_num":       "Y Axis (Numeric)",
+        "chart_x_num":       "X Axis (Numeric, bar length)",
+        "chart_y_cat":       "Y Axis (Category)",
+        "chart_group_opt":   "Group Variable (optional)",
+        "chart_no_group":    "(No grouping)",
+        "chart_x_time":      "X Axis (Time/Sequence)",
+        "chart_y_multi":     "Y Variables (numeric, multi-select ≤4)",
+        "chart_warn_nocat":  "Bar chart requires a categorical X axis. No clear categorical column found.",
+        "chart_warn_nocat2": "⚠️ No pure categorical columns, using low-cardinality numeric columns",
+        "chart_warn_notime": "⚠️ No time variable detected. Confirm X axis is an ordered sequence.",
+        "chart_warn_line4":  "Line chart max 4 lines. Truncated to first 4.",
+        "chart_warn_sc2":    "Scatter plot requires at least 2 numeric variables.",
+        "chart_warn_bub3":   "Bubble chart requires at least 3 numeric variables.",
+        "chart_warn_min1":   "Line chart requires at least 1 Y variable.",
+        "chart_x_num2":      "X Variable (numeric)",
+        "chart_y_num2":      "Y Variable (numeric, must differ from X)",
+        "chart_bubble_x":    "X Variable (numeric)",
+        "chart_bubble_y":    "Y Variable (numeric)",
+        "chart_bubble_size": "Bubble Size Variable (numeric)",
+        "chart_pie_label":   "Category Variable (sector labels)",
+        "chart_pie_value":   "Numeric Variable (sector sizes)",
+        "chart_donut_label": "Category Variable",
+        "chart_donut_value": "Numeric Variable",
+        "chart_box_num":     "Numeric Variable (required)",
+        "chart_box_grp":     "Group Variable (optional, categorical only)",
+        "chart_violin_num":  "Numeric Variable (required)",
+        "chart_violin_grp":  "Group Variable (optional)",
+        "chart_radar_vars":  "Dimension Variables (numeric, select 3–8)",
+        "chart_radar_grp":   "Group Variable (optional, for multi-group comparison)",
+        "chart_rank_var":    "Sort Variable (numeric)",
+        "chart_combo_x":     "X Axis (category/time)",
+        "chart_combo_bar":   "Bar Y (numeric)",
+        "chart_combo_line":  "Line Y (numeric, dual axis)",
+        "chart_sel_label":   "Select chart types (multi-select, auto-recommended)",
+        "chart_sel_help":    "Variable config for each chart appears below after selection",
+        "s2_chart_title":    "Chart Selection (Visualization Configuration)",
+        "s2_chart_hint":     "Select chart type first — variables will be constrained automatically.",
+        # ── Step 2 variable groups ──
+        "s2_group_detect":   "System detected <b style='color:#dde2f0;'>{g} variable groups</b> from {n} numeric columns:",
+        "s2_group_sel":      "Select Variable Groups (all variables auto-included)",
+        "s2_group_extra":    "Add Individual Variables (optional)",
+        "s2_group_added":    "✓ {n} variables included: {vars}",
+        "s2_pair_hint":      "No clear group structure. Manually select at least 2 variables:",
+        "s2_pair_a":         "Variable A",
+        "s2_pair_b":         "Variable B",
+        "s2_pair_extra":     "Add more comparison variables (optional)",
+        "s2_group_var":      "Group By (optional)",
+        "s2_no_group":       "(No grouping)",
+        "s2_time_var":       "Time Variable (optional, for trend chart)",
+        "s2_no_time":        "(Not used)",
+        # ── Step 3 chart subtitles ──
+        "ct_bar":       "Bar Chart",
+        "ct_hbar":      "Horizontal Bar",
+        "ct_gbar":      "Grouped Bar",
+        "ct_line":      "Line Chart",
+        "ct_area":      "Area Chart",
+        "ct_scatter":   "Scatter Plot",
+        "ct_bubble":    "Bubble Chart",
+        "ct_pie":       "Pie Chart",
+        "ct_donut":     "Donut Chart",
+        "ct_box":       "Box Plot",
+        "ct_violin":    "Violin Plot",
+        "ct_radar":     "Radar Chart",
+        "ct_heatmap":   "Heatmap",
+        "ct_rank":      "Ranked Change Chart",
+        "ct_combo":     "Combined Chart",
+        "ct_by":        "by",
+        "ct_grouped":   "(grouped: ",
+        "ct_trend":     "trend",
+        "ct_share":     "share",
+        "ct_vs":        "vs",
+        "ct_unified":   "uniform",
+        "ct_fail":      "Chart failed: ",
+        "ct_mean_cmp":  "Variable Comparison",
+        "ct_mean_y":    "Mean (±Std Dev)",
+        "ct_mean_title":"Mean Comparison",
+        "ct_min2":      "Please select at least 2 variables to generate a comparison chart.",
+        "s3_model_r2":  ["R²","Adj R²","RMSE","Sample Size"],
+        # ── Step 4 ──
+        "s4_word_fail": "Word generation failed: ",
+        "sig_label":     "significant",
+        "ov_col_name":   "Variable",
+        "ov_col_type":   "Type",
+        "ov_col_uniq":   "Unique",
+        "ov_col_miss":   "Missing",
+        "chart_violin_sub": "Violin Plot",
+        "chart_radar_sub":  "Radar Chart",
+        "chart_heat_sub":   "Heatmap · Correlation Matrix",
+        "chart_combo_sub":  "Combined Chart",
+        "chart_scatter_sub":"Scatter Plot",
+        "chart_dist_sub":   "Distribution",
+        "s3_no_sample":     "Insufficient sample size for regression.",
+        "ct_scatter_vs":    "Scatter Plot",
+        "chart_warn_radar3":  "Radar chart requires at least 3 dimension variables.",
+        "chart_heat_caption": "Heatmap will use the Pearson correlation matrix of selected numeric variables.",
+        "chart_heat_sel":     "Numeric variables for heatmap (leave empty for auto)",
+        "chart_warn_sc_xy":   "Scatter plot requires both X and Y variables.",
+        "chart_warn_radar_e": "Radar chart requires at least 3 dimension variables.",
+        "chart_rank_x":  "Sorted Index (ascending)",
+        "chart_mean":    "Mean",
+        "chart_freq":    "Frequency",
+        "chart_dist":    "Distribution Histogram",
+        "chart_trend":   "Trend Line",
+        "chart_median":  "Median",
+        "chart_rules": {
+            "Bar Chart":"X: Category  |  Y: Numeric",
+            "Horizontal Bar":"Y: Category  |  X: Numeric (bar length)",
+            "Grouped Bar":"X: Category  |  Y: Numeric  |  Group: optional",
+            "Line Chart":"X: Time/Sequence (preferred)  |  Y: Numeric (multi-select)",
+            "Area Chart":"X: Time/Sequence  |  Y: Numeric (multi-select)",
+            "Scatter Plot":"X: Numeric  |  Y: Numeric (must differ from X)",
+            "Bubble Chart":"X: Numeric  |  Y: Numeric  |  Size: 3rd numeric",
+            "Pie Chart":"Category: labels  |  Numeric: sector sizes",
+            "Donut Chart":"Category: labels  |  Numeric: sector sizes",
+            "Box Plot":"Numeric: required  |  Group: optional category",
+            "Violin Plot":"Numeric: required  |  Group: optional category",
+            "Radar Chart":"Dimensions: 3–8 numeric  |  Group: optional",
+            "Heatmap":"Numeric variables (auto correlation matrix)",
+            "Ranked Change Chart":"Sort variable: numeric",
+            "Combined Chart":"X: category/time  |  Bar Y: numeric  |  Line Y: numeric",
+        },
+        "prompt_lang":   "English",
+    }
+}
+
+
+def _get_T():
+    """获取当前语言的翻译字典"""
+    return _TRANSLATIONS[st.session_state.get("lang","zh")]
+
+
+def _get_analyst_system():
+    """返回当前语言的 AI system prompt"""
+    lang = st.session_state.get("lang","zh")
+    if lang == "zh":
+        return (
+            "你是一位严谨友好的数据分析助教，帮助学生和研究人员完成统计分析任务。"
+            "使用中文，语言清晰简洁，像分析报告一样专业。\n"
+            "【输出格式要求（必须严格遵守）】\n"
+            "1. 禁止输出任何长段落，所有内容必须分点表达。\n"
+            "2. 每一点使用数字编号：1. 2. 3. 4. 每点单独一行。\n"
+            "3. 每点格式：编号. [标签] 数据描述（含具体数值）— 分析解释（说明意义）\n"
+            "4. 结论用三个标题：【核心结论】【关键发现】【建议】，每组下各自编号。\n"
+            "5. 不使用 ** 加粗、# 标题或长段落。每点不超过两行。"
+        )
+    return (
+        "You are a rigorous and friendly data analysis assistant."
+        " Use English. Be clear, concise, and professional like an analysis report.\n"
+        "[OUTPUT FORMAT - STRICTLY FOLLOW]\n"
+        "1. No long paragraphs. All content must be in numbered points.\n"
+        "2. Use numeric numbering: 1. 2. 3. Each point on its own line.\n"
+        "3. Each point: N. [Tag] Data description (with values) — Analysis explanation\n"
+        "4. Conclusion uses three headings: [Core Conclusion] [Key Findings] [Recommendations]\n"
+        "5. No ** bold, no # headers. Max 2 lines per point."
+    )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 步骤导航条
@@ -828,8 +1464,9 @@ step_labels = [
 ]
 
 def render_step_bar(current: int):
+    T = _get_T()
     items = ""
-    for i, (num, label) in enumerate(step_labels):
+    for i, (num, label) in enumerate(T["step_labels"]):
         s = i + 1
         css = "active" if s == current else ("done" if s < current else "")
         icon = "✓ " if s < current else ""
@@ -852,19 +1489,31 @@ def phase_header(num: str, title: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 顶部标题
+# 语言切换 + 顶部标题
 # ══════════════════════════════════════════════════════════════════════════════
-st.markdown(
-    '<div class="main-title">AI 数据分析工具</div>'
-    '<div class="sub-title">问题驱动 · AI 协作 · 数据与解读同步输出</div>',
-    unsafe_allow_html=True,
-)
-st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+T = _get_T()  # 当前语言翻译
 
-# ── 字体调试信息（临时，确认后删除）──────────────────────────────────────────
-st.caption(f"🔤 字体调试：{_font_msg} | 字体名：{_font_name} | 路径：{_font_path}")
-# ─────────────────────────────────────────────────────────────────────────────
+_col_title, _col_lang = st.columns([9, 1])
+with _col_title:
+    st.markdown(
+        f'<div class="main-title">{T["app_title"]}</div>'
+        f'<div class="sub-title">{T["app_subtitle"]}</div>',
+        unsafe_allow_html=True,
+    )
+with _col_lang:
+    _cur_lang = st.session_state.get("lang","zh")
+    _lang_options = ["🇨🇳 中文", "🇺🇸 English"]
+    _lang_idx = 0 if _cur_lang == "zh" else 1
+    _lang_sel = st.selectbox("🌐", _lang_options, index=_lang_idx,
+                             key="_lang_sel", label_visibility="collapsed")
+    _new_lang = "zh" if _lang_sel == "🇨🇳 中文" else "en"
+    if _new_lang != _cur_lang:
+        st.session_state["lang"] = _new_lang
+        st.session_state["plan"] = None   # 清空方案缓存，切换语言后重新生成
+        T = _get_T()
+        st.rerun()
 
+st.markdown("<div style='height:0.4rem'></div>", unsafe_allow_html=True)
 render_step_bar(st.session_state.step)
 st.markdown("<hr class='divider'>", unsafe_allow_html=True)
 
@@ -873,20 +1522,19 @@ st.markdown("<hr class='divider'>", unsafe_allow_html=True)
 # STEP 1 · 问题导入 + 数据上传
 # ══════════════════════════════════════════════════════════════════════════════
 if st.session_state.step == 1:
-    phase_header("01", "问题导入")
+    T = _get_T()
+    phase_header("01", T["s1_title"])
 
     st.markdown(
-        '<div class="card">'
-        '<div style="font-size:0.82rem;color:#6b7a9a;line-height:1.8;margin-bottom:1.2rem;">'
-        '在开始分析之前，请先描述你想研究的问题或目标。<br>'
-        '明确的问题能帮助 AI 推荐更合适的变量和分析方法，让后续结论更有针对性。'
-        '</div>',
+        f'<div class="card">'
+        f'<div style="font-size:0.82rem;color:#6b7a9a;line-height:1.8;margin-bottom:1.2rem;">'
+        f'{T["s1_desc"]}</div>',
         unsafe_allow_html=True,
     )
 
     question_input = st.text_area(
-        "你的研究问题 / 分析目标",
-        placeholder="例如：哪些因素影响学生的期末成绩？\n例如：房屋面积和地段对房价有多大影响？\n例如：员工工作年限与薪资之间是否存在显著关系？",
+        T["s1_q_label"],
+        placeholder=T["s1_placeholder"],
         height=120,
         value=st.session_state.question,
     )
@@ -902,20 +1550,20 @@ if st.session_state.step == 1:
         unsafe_allow_html=True,
     )
     uploaded = st.file_uploader(
-        "支持 CSV（UTF-8 / GBK）和 Excel（.xlsx / .xls）",
+        T["s1_upload_hint"],
         type=["csv", "xlsx", "xls"],
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
     col_btn, col_tip = st.columns([1, 3])
     with col_btn:
-        go = st.button("下一步：AI 方案设计 →", width='stretch')
+        go = st.button(T["s1_next"], width='stretch')
 
     if go:
         if not question_input.strip():
-            st.error("请先输入你的研究问题。")
+            st.error(T["s1_err_q"])
         elif uploaded is None:
-            st.error("请上传数据文件。")
+            st.error(T["s1_err_file"])
         else:
             try:
                 df = load_data(uploaded)
@@ -926,17 +1574,18 @@ if st.session_state.step == 1:
                 st.session_state.step      = 2
                 st.rerun()
             except Exception as e:
-                st.error(f"文件读取失败：{e}")
+                st.error(T.get("s1_err_load","文件读取失败：") + str(e))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 2 · AI 分析方案设计 + 用户确认与调整（合并步骤）
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.step == 2:
-    phase_header("02", "分析方案设计与确认")
+    T = _get_T()
+    phase_header("02", T["s2_title"])
 
     st.markdown(
-        f'<div class="question-display">🔍 研究问题：{st.session_state.question}</div>',
+        f'<div class="question-display">{T["s2_q_prefix"]}{st.session_state.question}</div>',
         unsafe_allow_html=True,
     )
 
@@ -945,13 +1594,13 @@ elif st.session_state.step == 2:
     all_cols = df.columns.tolist()
 
     # ── 数据概览（折叠） ──────────────────────────────────────────────────────
-    with st.expander("📋 数据概览（点击展开）", expanded=False):
+    with st.expander(T["s2_overview"], expanded=False):
         c1, c2, c3 = st.columns(3)
         miss_pct_ov = df.isnull().sum().sum() / df.size * 100
         for col, val, lbl in zip(
             [c1, c2, c3],
             [df.shape[0], df.shape[1], f"{miss_pct_ov:.1f}%"],
-            ["样本量", "变量数", "缺失率"],
+            [T["s2_ov_n"], T["s2_ov_cols"], T["s2_ov_miss"]],
         ):
             col.markdown(
                 f'<div class="stat-box"><div class="stat-number">{val}</div>'
@@ -968,32 +1617,37 @@ elif st.session_state.step == 2:
             )
         st.markdown(
             f"<table class='reg-table'><thead><tr>"
-            f"<th>变量名</th><th>类型</th><th>唯一值</th><th>缺失</th>"
+            f"<th>{T.get('ov_col_name','变量名')}</th><th>{T.get('ov_col_type','类型')}</th><th>{T.get('ov_col_uniq','唯一值')}</th><th>{T.get('ov_col_miss','缺失')}</th>"
             f"</tr></thead><tbody>{rows_html}</tbody></table>",
             unsafe_allow_html=True,
         )
 
     # ── AI 生成分析方案 ────────────────────────────────────────────────────────
-    if st.session_state.plan is None:
-        with st.spinner("✦ AI 正在设计分析方案，请稍候…"):
+    _cur_plan_lang = st.session_state.get("plan_lang","")
+    _cur_lang_now  = st.session_state.get("lang","zh")
+    if st.session_state.plan is None or _cur_plan_lang != _cur_lang_now:
+        _spin_txt = "✦ Generating analysis plan, please wait…" if _cur_lang_now == "en" else "✦ AI 正在设计分析方案，请稍候…"
+        with st.spinner(_spin_txt):
             plan = ai_design_plan(
                 st.session_state.question,
                 json.dumps(st.session_state.col_info, ensure_ascii=False),
+                lang=_cur_lang_now,
             )
             st.session_state.plan = plan
+            st.session_state.plan_lang = _cur_lang_now
 
     plan = st.session_state.plan
 
     # ── 方案展示区 ────────────────────────────────────────────────────────────
     if "_error" in plan:
-        st.warning("AI 方案生成遇到解析问题，请在下方手动配置变量后继续。")
-        with st.expander("查看原始 AI 输出", expanded=False):
+        st.warning(T["s2_plan_err"])
+        with st.expander(T["s2_plan_raw"], expanded=False):
             st.code(plan.get("_raw", ""))
     else:
         st.markdown(
             '<div style="font-size:0.72rem;font-weight:700;letter-spacing:0.13em;'
             'text-transform:uppercase;color:#5b8dee;margin:1.2rem 0 0.8rem 0;">'
-            'AI 方案设计</div>',
+            f'{T["card_ai_plan"]}</div>',
             unsafe_allow_html=True,
         )
 
@@ -1009,7 +1663,7 @@ elif st.session_state.step == 2:
         with col_l:
             st.markdown(
                 f'<div class="rec-card">'
-                f'<div class="rec-title">分析类型</div>'
+                f'<div class="rec-title">{T["card_types"]}</div>'
                 f'<div class="rec-value">{"  ·  ".join(a_types) if a_types else "—"}</div>'
                 f'<div class="rec-reason">{methods_text}</div>'
                 f'</div>',
@@ -1023,10 +1677,10 @@ elif st.session_state.step == 2:
         with col_r:
             st.markdown(
                 f'<div class="rec-card">'
-                f'<div class="rec-title">核心变量</div>'
-                f'<div class="rec-value">因变量：{dep}</div>'
+                f'<div class="rec-title">{T["card_vars"]}</div>'
+                f'<div class="rec-value">{T["card_dep"]}{dep}</div>'
                 f'<div class="rec-reason">'
-                f'自变量：{" · ".join(indep) if indep else "—"}<br>'
+                f'{T["card_indep"]}{" · ".join(indep) if indep else "—"}<br>'
                 f'{core.get("vars_reason", "")}'
                 f'</div>'
                 f'</div>',
@@ -1035,12 +1689,12 @@ elif st.session_state.step == 2:
 
         # 分组维度
         g_dims = plan.get("group_dims", [])
-        g_reason = plan.get("group_dims_reason") or "无需分组"
+        g_reason = plan.get("group_dims_reason") or T.get("card_no_group_reason","无需分组")
         with col_l:
             st.markdown(
                 f'<div class="rec-card">'
-                f'<div class="rec-title">分组维度</div>'
-                f'<div class="rec-value">{"  ·  ".join(g_dims) if g_dims else "无"}</div>'
+                f'<div class="rec-title">{T["card_group"]}</div>'
+                f'<div class="rec-value">{" · ".join(g_dims) if g_dims else T["card_no_group"]}</div>'
                 f'<div class="rec-reason">{g_reason}</div>'
                 f'</div>',
                 unsafe_allow_html=True,
@@ -1054,7 +1708,7 @@ elif st.session_state.step == 2:
         with col_r:
             st.markdown(
                 f'<div class="rec-card">'
-                f'<div class="rec-title">推荐图表</div>'
+                f'<div class="rec-title">{T["card_charts"]}</div>'
                 f'<div class="rec-value">{" · ".join([c.get("name","") for c in charts]) if charts else "—"}</div>'
                 f'<div class="rec-reason">{charts_text}</div>'
                 f'</div>',
@@ -1065,14 +1719,14 @@ elif st.session_state.step == 2:
         use_reg    = plan.get("use_regression", False)
         reg_reason = plan.get("regression_reason", "")
         reg_badge  = (
-            '<span class="badge badge-green">建议回归</span>'
+            f'<span class="badge badge-green">{T["card_reg_yes"]}</span>'
             if use_reg else
-            '<span class="badge badge-gray">暂不需要</span>'
+            f'<span class="badge badge-gray">{T["card_reg_no"]}</span>'
         )
         with col_l:
             st.markdown(
                 f'<div class="rec-card">'
-                f'<div class="rec-title">是否建议回归</div>'
+                f'<div class="rec-title">{T["card_reg"]}</div>'
                 f'<div class="rec-value">{reg_badge}</div>'
                 f'<div class="rec-reason">{reg_reason}</div>'
                 f'</div>',
@@ -1083,7 +1737,7 @@ elif st.session_state.step == 2:
         with col_r:
             st.markdown(
                 f'<div class="rec-card">'
-                f'<div class="rec-title">分析逻辑说明</div>'
+                f'<div class="rec-title">{T["card_logic"]}</div>'
                 f'<div class="rec-reason" style="color:#c0cce0;line-height:1.75;">'
                 f'{plan.get("logic", "—")}'
                 f'</div>'
@@ -1096,26 +1750,37 @@ elif st.session_state.step == 2:
     st.markdown(
         '<div style="font-size:0.72rem;font-weight:700;letter-spacing:0.13em;'
         'text-transform:uppercase;color:#5b8dee;margin-bottom:0.8rem;">'
-        '调整与确认</div>',
+        f'{T["s2_adjust_hdr"]}</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
-        '<div style="font-size:0.82rem;color:#6b7a9a;margin-bottom:1.2rem;">'
-        'AI 已根据你的问题预填了以下配置，你可以直接确认，也可以修改后再继续。'
-        '</div>',
+        f'<div style="font-size:0.82rem;color:#6b7a9a;margin-bottom:1.2rem;">{T["s2_adjust_tip"]}</div>',
         unsafe_allow_html=True,
     )
 
     st.markdown('<div class="card">', unsafe_allow_html=True)
 
     # ── 第一行：分析类型（多选）────────────────────────────────────────────
-    all_analysis_types = ["描述性统计", "对比分析", "趋势分析", "相关性分析", "回归分析"]
-    ai_types = plan.get("analysis_types", []) if "_error" not in plan else ["描述性统计"]
+    all_analysis_types = T["s2_all_types"]
+    ai_types_raw = plan.get("analysis_types", []) if "_error" not in plan else ["描述性统计"]
+    # 双向映射：无论 plan 返回中文还是英文类型名，都能匹配当前语言的选项
+    _zh2en = {"描述性统计":"Descriptive Stats","对比分析":"Comparison",
+              "趋势分析":"Trend Analysis","相关性分析":"Correlation","回归分析":"Regression"}
+    _en2zh = {v:k for k,v in _zh2en.items()}
+    _lang_now = st.session_state.get("lang","zh")
+    if _lang_now == "en":
+        ai_types = [_zh2en.get(t, t) for t in ai_types_raw]
+    else:
+        ai_types = [_en2zh.get(t, t) for t in ai_types_raw]
+    # fallback：若默认值为空（匹配失败）则选全部
+    _default_types = [t for t in ai_types if t in all_analysis_types]
+    if not _default_types and ai_types_raw:
+        _default_types = all_analysis_types[:min(len(ai_types_raw), len(all_analysis_types))]
     chosen_types = st.multiselect(
-        "分析类型（可多选，选择后下方变量配置随之变化）",
+        T["s2_types_label"],
         all_analysis_types,
-        default=[t for t in ai_types if t in all_analysis_types],
-        help="所选类型直接决定执行哪种分析，无需额外勾选",
+        default=_default_types,
+        help=T["s2_types_help"],
     )
 
     st.markdown("<div style='height:0.6rem'></div>", unsafe_allow_html=True)
@@ -1130,28 +1795,29 @@ elif st.session_state.step == 2:
     cfg = {}   # 存放每种类型的变量配置
 
     # ── 描述性统计变量 ──────────────────────────────────────────────────────
-    if "描述性统计" in chosen_types:
+    # 将 chosen_types 映射为中文用于变量配置的判断
+    _chosen_zh = [_en2zh.get(t,t) for t in chosen_types]
+    if "描述性统计" in _chosen_zh:
         st.markdown(
-            '<div style="font-size:0.75rem;color:#5b8dee;font-weight:600;'
-            'margin:0.8rem 0 0.4rem 0;">📋 描述性统计 · 分析变量</div>',
+            f'<div style="font-size:0.75rem;color:#5b8dee;font-weight:600;margin:0.8rem 0 0.4rem 0;">{T["s2_desc_vars"]}</div>',
             unsafe_allow_html=True,
         )
         default_desc = [v for v in (ai_indep + ([ai_dep] if ai_dep else [])) if v in num_cols]
         if not default_desc:
             default_desc = num_cols[:min(4, len(num_cols))]
         cfg["desc_vars"] = st.multiselect(
-            "选择参与描述性统计的变量",
+            T["s2_desc_sel"],
             num_cols,
             default=default_desc,
             key="sel_desc_vars",
         )
 
     # ── 对比分析 / 趋势分析变量 ─────────────────────────────────────────────
-    if "对比分析" in chosen_types or "趋势分析" in chosen_types:
+    if "对比分析" in _chosen_zh or "趋势分析" in _chosen_zh:
         active_label = "对比分析 / 趋势分析"
-        if "对比分析" in chosen_types and "趋势分析" not in chosen_types:
+        if "对比分析" in _chosen_zh and "趋势分析" not in _chosen_zh:
             active_label = "对比分析"
-        elif "趋势分析" in chosen_types and "对比分析" not in chosen_types:
+        elif "趋势分析" in _chosen_zh and "对比分析" not in _chosen_zh:
             active_label = "趋势分析"
         st.markdown(
             f'<div style="font-size:0.75rem;color:#5b8dee;font-weight:600;'
@@ -1295,9 +1961,8 @@ elif st.session_state.step == 2:
         if group_labels_map:
             st.markdown(
                 f'<div style="font-size:0.78rem;color:#6b7a9a;margin-bottom:0.6rem;">'
-                f'系统从 {len(num_cols)} 个数值变量中检测到 <b style="color:#dde2f0;">'
-                f'{len(group_labels_map)} 个变量组</b>，选择一组后将自动纳入该组全部变量：'
-                f'</div>',
+                + T["s2_group_detect"].format(n=len(num_cols), g=len(group_labels_map))
+                + '</div>',
                 unsafe_allow_html=True,
             )
 
@@ -1322,11 +1987,11 @@ elif st.session_state.step == 2:
             ] or group_options_list[:1]
 
             selected_groups = st.multiselect(
-                "选择变量组（可多选，每组所有变量自动纳入对比）",
+                T["s2_group_sel"],
                 group_options_list,
                 default=default_groups,
                 key="sel_var_groups",
-                help="选中一个组 = 自动选中该组的全部变量，无需逐一勾选",
+                help=T.get("s2_group_sel_help","选中一个组 = 自动选中该组的全部变量"),
             )
 
             # 展开 → target_vars
@@ -1336,7 +2001,7 @@ elif st.session_state.step == 2:
 
             # 额外追加
             extra = st.multiselect(
-                "额外追加单个变量（可选）",
+                T["s2_group_extra"],
                 [v for v in num_cols if v not in expanded_vars],
                 default=[],
                 key="sel_extra_vars",
@@ -1345,9 +2010,9 @@ elif st.session_state.step == 2:
 
             if cfg["target_vars"]:
                 st.markdown(
-                    f'<div style="font-size:0.74rem;color:#3dd68c;margin-top:0.4rem;">'
-                    f'✓ 已纳入 {len(cfg["target_vars"])} 个变量：'
-                    f'{" · ".join(cfg["target_vars"])}</div>',
+                    '<div style="font-size:0.74rem;color:#3dd68c;margin-top:0.4rem;">'
+                    + T["s2_group_added"].format(n=len(cfg["target_vars"]), vars=" · ".join(cfg["target_vars"]))
+                    + '</div>',
                     unsafe_allow_html=True,
                 )
             else:
@@ -1357,18 +2022,18 @@ elif st.session_state.step == 2:
             # 完全无法识别分组 → 成对选择模式
             st.markdown(
                 '<div style="font-size:0.78rem;color:#6b7a9a;margin-bottom:0.5rem;">'
-                '未检测到明显分组结构，请手动选择要对比的变量（至少 2 个）：'
-                '</div>',
+                + T["s2_pair_hint"]
+                + '</div>',
                 unsafe_allow_html=True,
             )
             c_a, c_b = st.columns(2)
             with c_a:
-                var_a = st.selectbox("对比变量 A", num_cols, index=0, key="sel_pair_a")
+                var_a = st.selectbox(T["s2_pair_a"], num_cols, index=0, key="sel_pair_a")
             with c_b:
                 remaining = [v for v in num_cols if v != var_a]
-                var_b = st.selectbox("对比变量 B", remaining, index=0, key="sel_pair_b")
+                var_b = st.selectbox(T["s2_pair_b"], remaining, index=0, key="sel_pair_b")
             extra_pair = st.multiselect(
-                "额外追加更多对比变量（可选）",
+                T["s2_pair_extra"],
                 [v for v in num_cols if v not in [var_a, var_b]],
                 default=[], key="sel_pair_extra",
             )
@@ -1379,12 +2044,12 @@ elif st.session_state.step == 2:
         group_options = cat_cols if cat_cols else all_cols
         ai_group = ai_groups[0] if ai_groups and ai_groups[0] in group_options else None
         cfg["group_var"] = st.selectbox(
-            "分组维度（Group by，可选）",
-            ["（不分组）"] + group_options,
+            T["s2_group_var"],
+            [T["s2_no_group"]] + group_options,
             index=(group_options.index(ai_group) + 1) if ai_group else 0,
             key="sel_group_var",
         )
-        cfg["group_var"] = None if cfg["group_var"] == "（不分组）" else cfg["group_var"]
+        cfg["group_var"] = None if cfg["group_var"] == T["s2_no_group"] else cfg["group_var"]
 
         # ── 时间变量 ─────────────────────────────────────────────────────────
         time_candidates = [c for c in all_cols if any(
@@ -1394,19 +2059,18 @@ elif st.session_state.step == 2:
         )]
         if time_candidates:
             cfg["time_var"] = st.selectbox(
-                "时间变量（可选，用于趋势图）",
-                ["（不使用）"] + time_candidates,
+                T["s2_time_var"],
+                [T["s2_no_time"]] + time_candidates,
                 key="sel_time_var",
             )
-            cfg["time_var"] = None if cfg["time_var"] == "（不使用）" else cfg["time_var"]
+            cfg["time_var"] = None if cfg["time_var"] == T["s2_no_time"] else cfg["time_var"]
         else:
             cfg["time_var"] = None
 
     # ── 相关性分析变量 ──────────────────────────────────────────────────────
-    if "相关性分析" in chosen_types:
+    if "相关性分析" in _chosen_zh:
         st.markdown(
-            '<div style="font-size:0.75rem;color:#5b8dee;font-weight:600;'
-            'margin:0.8rem 0 0.4rem 0;">🔗 相关性分析 · 参与变量</div>',
+            f'<div style="font-size:0.75rem;color:#5b8dee;font-weight:600;margin:0.8rem 0 0.4rem 0;">{T["s2_corr_vars"]}</div>',
             unsafe_allow_html=True,
         )
         default_corr = [v for v in (([ai_dep] if ai_dep else []) + ai_indep) if v in num_cols]
@@ -1417,19 +2081,18 @@ elif st.session_state.step == 2:
             num_cols,
             default=default_corr,
             key="sel_corr_vars",
-            help="将计算所选变量之间的两两 Pearson 相关系数并绘制热力图",
+            help=T["s2_corr_help"],
         )
 
     # ── 回归分析变量 ────────────────────────────────────────────────────────
-    if "回归分析" in chosen_types:
+    if "回归分析" in _chosen_zh:
         st.markdown(
-            '<div style="font-size:0.75rem;color:#5b8dee;font-weight:600;'
-            'margin:0.8rem 0 0.4rem 0;">📈 回归分析 · 变量配置</div>',
+            f'<div style="font-size:0.75rem;color:#5b8dee;font-weight:600;margin:0.8rem 0 0.4rem 0;">{T["s2_reg_vars"]}</div>',
             unsafe_allow_html=True,
         )
         y_default = num_cols.index(ai_dep) if ai_dep in num_cols else 0
         cfg["reg_y"] = st.selectbox(
-            "因变量（Y）",
+            T["s2_dep_var"],
             num_cols,
             index=y_default,
             key="sel_reg_y",
@@ -1440,14 +2103,14 @@ elif st.session_state.step == 2:
         if not ai_x_valid:
             ai_x_valid = x_options[:min(3, len(x_options))]
         cfg["reg_x"] = st.multiselect(
-            "自变量（X）",
+            T["s2_indep_vars"],
             x_options,
             default=ai_x_valid,
             key="sel_reg_x",
         )
         if cfg["reg_x"]:
             cfg["scatter_x"] = st.selectbox(
-                "散点图：选择与因变量对比展示的自变量",
+                T["s2_scatter_sel"],
                 cfg["reg_x"],
                 key="sel_scatter_x",
             )
@@ -1459,14 +2122,11 @@ elif st.session_state.step == 2:
     # ══════════════════════════════════════════════════════════════════════════
     st.markdown("<hr class='divider'>", unsafe_allow_html=True)
     st.markdown(
-        '<div style="font-size:0.75rem;color:#5b8dee;font-weight:600;'
-        'margin:0.8rem 0 0.4rem 0;">📊 图表选择（Visualization Configuration）</div>',
+        f'<div style="font-size:0.75rem;color:#5b8dee;font-weight:600;margin:0.8rem 0 0.4rem 0;">📊 {T.get("s2_chart_title","图表选择")}</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
-        '<div style="font-size:0.8rem;color:#6b7a9a;margin-bottom:0.8rem;">'
-        '先选图表类型，系统将自动约束可选变量，避免无效组合。'
-        '</div>',
+        f'<div style="font-size:0.8rem;color:#6b7a9a;margin-bottom:0.8rem;">{T.get("s2_chart_hint","先选图表类型，系统将自动约束可选变量")}</div>',
         unsafe_allow_html=True,
     )
 
@@ -1491,7 +2151,8 @@ elif st.session_state.step == 2:
     _default_x_num = (nc[1] if len(nc) > 1 else (nc[0] if nc else None))
 
     # ── 全量图表类型 ──────────────────────────────────────────────────────────
-    all_chart_types = [
+    # 图表类型列表：始终用中文内部名 → 显示时用翻译
+    _all_chart_zh = [
         "柱状图", "条形图", "分组柱状图",
         "折线图", "面积图",
         "散点图", "气泡图",
@@ -1501,6 +2162,15 @@ elif st.session_state.step == 2:
         "热力图",
         "变化排序图", "组合图（柱+线）",
     ]
+    _ct_zh2label = {
+        "柱状图":T["ct_bar"],"条形图":T["ct_hbar"],"分组柱状图":T["ct_gbar"],
+        "折线图":T["ct_line"],"面积图":T["ct_area"],"散点图":T["ct_scatter"],
+        "气泡图":T["ct_bubble"],"饼图":T["ct_pie"],"圆环图":T["ct_donut"],
+        "箱线图":T["ct_box"],"小提琴图":T["ct_violin"],"雷达图":T["ct_radar"],
+        "热力图":T["ct_heatmap"],"变化排序图":T["ct_rank"],"组合图（柱+线）":T["ct_combo"],
+    }
+    _ct_label2zh = {v:k for k,v in _ct_zh2label.items()}
+    all_chart_types = [_ct_zh2label[c] for c in _all_chart_zh]
 
     # ── 动态推荐逻辑：结合分析类型 + 数据特征 + 研究问题关键词 ────────────────
     _q = st.session_state.get("question", "").lower()
@@ -1539,15 +2209,24 @@ elif st.session_state.step == 2:
         # 去重保序，过滤不在列表的
         return list(dict.fromkeys([c for c in recs if c in all_chart_types])) or ["柱状图"]
 
-    default_charts = _smart_defaults(
-        chosen_types, _q,
+    # _smart_defaults 内部用中文类型名判断，返回结果映射到当前语言
+    _zh2ct = {"柱状图":"Bar Chart","条形图":"Horizontal Bar","分组柱状图":"Grouped Bar",
+              "折线图":"Line Chart","面积图":"Area Chart","散点图":"Scatter Plot",
+              "气泡图":"Bubble Chart","饼图":"Pie Chart","圆环图":"Donut Chart",
+              "箱线图":"Box Plot","小提琴图":"Violin Plot","雷达图":"Radar Chart",
+              "热力图":"Heatmap","变化排序图":"Ranked Change Chart","组合图（柱+线）":"Combined Chart"}
+    _default_charts_zh = _smart_defaults(
+        _chosen_zh, _q,
         has_time=bool(time_c),
         has_cat=bool(cat_c),
         n_num=len(nc),
     )
+    default_charts = [_ct_zh2label.get(c,c) for c in _default_charts_zh if _ct_zh2label.get(c,c) in all_chart_types]
+    if not default_charts:
+        default_charts = all_chart_types[:1]
 
     chart_types_sel = st.multiselect(
-        "选择图表类型（可多选，已根据分析类型和问题自动推荐）",
+        T["chart_sel_label"],
         all_chart_types,
         default=default_charts,
         key="sel_chart_types",
@@ -1556,23 +2235,10 @@ elif st.session_state.step == 2:
     st.markdown("<div style='height:0.3rem'></div>", unsafe_allow_html=True)
 
     # ── 约束规则说明 ─────────────────────────────────────────────────────────
-    _CHART_RULES = {
-        "柱状图":       "X: 分类变量  |  Y: 数值变量",
-        "条形图":       "Y: 分类变量  |  X: 数值变量（横向柱状）",
-        "分组柱状图":   "X: 分类变量  |  Y: 数值变量  |  分组: 可选分类",
-        "折线图":       "X: 时间/序列变量（优先）  |  Y: 数值（可多选）",
-        "面积图":       "X: 时间/序列变量（优先）  |  Y: 数值（可多选，展示累积趋势）",
-        "散点图":       "X: 数值  |  Y: 数值（须不同列）",
-        "气泡图":       "X: 数值  |  Y: 数值  |  气泡大小: 第三数值变量",
-        "饼图":         "分类变量: 类别  |  数值变量: 各类别的值",
-        "圆环图":       "分类变量: 类别  |  数值变量: 各类别的值（同饼图，中空样式）",
-        "箱线图":       "数值变量: 必选  |  分组变量: 可选分类",
-        "小提琴图":     "数值变量: 必选  |  分组变量: 可选分类（展示分布形状）",
-        "雷达图":       "维度变量: 多个数值变量（3-8个）  |  分组变量: 可选分类",
-        "热力图":       "行变量: 分类  |  列变量: 分类  |  值: 数值（或自动用相关矩阵）",
-        "变化排序图":   "排序变量: 数值变量（展示从小到大排列）",
-        "组合图（柱+线）": "X: 分类/时间  |  柱Y: 数值  |  线Y: 数值（双指标叠加）",
-    }
+    # chart_rules key 需要用当前语言的图表显示名
+    _rules_raw = T.get("chart_rules", {})
+    _lang_chart = st.session_state.get("lang", "zh")
+    _CHART_RULES = {_ct_zh2label.get(k, k): v for k, v in _rules_raw.items()} if _lang_chart != "en" else _rules_raw
     for ct in chart_types_sel:
         st.markdown(
             f'<div style="font-size:0.7rem;color:#3d4a6a;margin-bottom:0.15rem;">'
@@ -1587,239 +2253,240 @@ elif st.session_state.step == 2:
 
     # ── 1. 柱状图 ─────────────────────────────────────────────────────────────
     if "柱状图" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🔵 柱状图</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🔵 {T["ct_bar"]}</div>', unsafe_allow_html=True)
         if not x_cat_pool:
-            st.warning("柱状图需要分类型 X 轴，当前数据集无明显分类变量。")
+            st.warning(T["chart_warn_nocat"])
         else:
             c1, c2 = st.columns(2)
             with c1:
                 if not cat_c and low_card_num:
-                    st.caption("⚠️ 无纯分类列，已候选低唯一值数值列")
-                ccfg["bar_x"] = st.selectbox("X 轴（分类变量）", x_cat_pool,
+                    st.caption(T["chart_warn_nocat2"])
+                ccfg["bar_x"] = st.selectbox(T["chart_x_cat"], x_cat_pool,
                     index=x_cat_pool.index(_default_x_cat) if _default_x_cat in x_cat_pool else 0,
                     key="chart_bar_x")
             with c2:
                 y_pool = [v for v in nc if v != ccfg.get("bar_x")]
-                ccfg["bar_y"] = st.selectbox("Y 轴（数值变量）", y_pool or nc,
+                ccfg["bar_y"] = st.selectbox(T["chart_y_num"], y_pool or nc,
                     index=y_pool.index(_default_y) if _default_y in y_pool else 0,
                     key="chart_bar_y")
 
     # ── 2. 条形图（横向柱状图）───────────────────────────────────────────────
     if "条形图" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">↔ 条形图</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">↔ {T["ct_hbar"]}</div>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
-            ccfg["hbar_y"] = st.selectbox("Y 轴（分类变量，横轴类别）", x_cat_pool or ac,
+            ccfg["hbar_y"] = st.selectbox(T["chart_y_cat"], x_cat_pool or ac,
                 index=0, key="chart_hbar_y")
         with c2:
             y_pool_hb = [v for v in nc if v != ccfg.get("hbar_y")]
-            ccfg["hbar_x"] = st.selectbox("X 轴（数值变量，条形长度）", y_pool_hb or nc,
+            ccfg["hbar_x"] = st.selectbox(T["chart_x_num"], y_pool_hb or nc,
                 index=y_pool_hb.index(_default_y) if _default_y in y_pool_hb else 0,
                 key="chart_hbar_x")
 
     # ── 3. 分组柱状图 ─────────────────────────────────────────────────────────
     if "分组柱状图" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🟦 分组柱状图</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🟦 {T["ct_gbar"]}</div>', unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
         with c1:
-            ccfg["gbar_x"] = st.selectbox("X 轴（分类变量）", x_cat_pool or ac,
+            ccfg["gbar_x"] = st.selectbox(T["chart_x_cat"], x_cat_pool or ac,
                 index=x_cat_pool.index(_default_x_cat) if _default_x_cat in x_cat_pool else 0,
                 key="chart_gbar_x")
         with c2:
             y_pool_gb = [v for v in nc if v != ccfg.get("gbar_x")]
-            ccfg["gbar_y"] = st.selectbox("Y 轴（数值变量）", y_pool_gb or nc,
+            ccfg["gbar_y"] = st.selectbox(T["chart_y_num"], y_pool_gb or nc,
                 index=y_pool_gb.index(_default_y) if _default_y in y_pool_gb else 0,
                 key="chart_gbar_y")
         with c3:
             grp_pool = [v for v in cat_or_low if v != ccfg.get("gbar_x")]
-            ccfg["gbar_group"] = st.selectbox("分组变量（可选）", ["（不分组）"] + grp_pool, key="chart_gbar_group")
-            ccfg["gbar_group"] = None if ccfg["gbar_group"] == "（不分组）" else ccfg["gbar_group"]
+            ccfg["gbar_group"] = st.selectbox(T["chart_group_opt"], [T["s2_no_group"]] + grp_pool, key="chart_gbar_group")
+            ccfg["gbar_group"] = None if ccfg["gbar_group"] == T["s2_no_group"] else ccfg["gbar_group"]
 
     # ── 4. 折线图 ─────────────────────────────────────────────────────────────
     if "折线图" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🟢 折线图</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🟢 {T["ct_line"]}</div>', unsafe_allow_html=True)
         x_line_pool = time_c + [c for c in cat_c if c not in time_c] + [c for c in ac if c not in time_c and c not in cat_c]
         x_line_pool = x_line_pool or ac
         c1, c2 = st.columns(2)
         with c1:
             if not time_c:
-                st.caption("⚠️ 未检测到时间变量，请确认 X 轴是否为有序序列")
-            ccfg["line_x"] = st.selectbox("X 轴（时间/序列）", x_line_pool, index=0, key="chart_line_x")
+                st.caption(T["chart_warn_notime"])
+            ccfg["line_x"] = st.selectbox(T["chart_x_time"], x_line_pool, index=0, key="chart_line_x")
         with c2:
             y_pool_ln = [v for v in nc if v != ccfg.get("line_x")]
-            ccfg["line_y"] = st.multiselect("Y 变量（数值，可多选≤4）",
+            ccfg["line_y"] = st.multiselect(T["chart_y_multi"],
                 y_pool_ln or nc,
                 default=[_default_y] if _default_y in (y_pool_ln or nc) else (y_pool_ln or nc)[:1],
                 key="chart_line_y")
             if len(ccfg["line_y"]) > 4:
-                st.warning("折线图最多 4 条线，已截取前 4 个。")
+                st.warning(T["chart_warn_line4"])
                 ccfg["line_y"] = ccfg["line_y"][:4]
 
     # ── 5. 面积图 ─────────────────────────────────────────────────────────────
     if "面积图" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🌊 面积图</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🌊 {T["ct_area"]}</div>', unsafe_allow_html=True)
         x_area_pool = time_c + [c for c in ac if c not in time_c]
         c1, c2 = st.columns(2)
         with c1:
-            ccfg["area_x"] = st.selectbox("X 轴（时间/序列）", x_area_pool or ac, index=0, key="chart_area_x")
+            ccfg["area_x"] = st.selectbox(T["chart_x_time"], x_area_pool or ac, index=0, key="chart_area_x")
         with c2:
             y_pool_ar = [v for v in nc if v != ccfg.get("area_x")]
-            ccfg["area_y"] = st.multiselect("Y 变量（数值，可多选≤4）",
+            ccfg["area_y"] = st.multiselect(T["chart_y_multi"],
                 y_pool_ar or nc,
                 default=[_default_y] if _default_y in (y_pool_ar or nc) else (y_pool_ar or nc)[:1],
                 key="chart_area_y")
 
     # ── 6. 散点图 ─────────────────────────────────────────────────────────────
     if "散点图" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🟡 散点图</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🟡 {T["ct_scatter"]}</div>', unsafe_allow_html=True)
         if len(nc) < 2:
-            st.warning("散点图需要至少 2 个数值变量。")
+            st.warning(T["chart_warn_sc2"])
         else:
             c1, c2 = st.columns(2)
             with c1:
-                ccfg["scatter_x"] = st.selectbox("X 变量（数值）", nc,
+                ccfg["scatter_x"] = st.selectbox(T["chart_x_num2"], nc,
                     index=nc.index(_default_x_num) if _default_x_num in nc else 0,
                     key="chart_scatter_x")
             with c2:
                 y_pool_sc = [v for v in nc if v != ccfg["scatter_x"]]
-                ccfg["scatter_y"] = st.selectbox("Y 变量（数值，须与 X 不同）", y_pool_sc,
+                ccfg["scatter_y"] = st.selectbox(T["chart_y_num2"], y_pool_sc,
                     index=y_pool_sc.index(_default_y) if _default_y in y_pool_sc else 0,
                     key="chart_scatter_y")
 
     # ── 7. 气泡图 ─────────────────────────────────────────────────────────────
     if "气泡图" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🫧 气泡图</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🫧 {T["ct_bubble"]}</div>', unsafe_allow_html=True)
         if len(nc) < 3:
-            st.warning("气泡图需要至少 3 个数值变量（X / Y / 气泡大小）。")
+            st.warning(T["chart_warn_bub3"])
         else:
             c1, c2, c3 = st.columns(3)
             with c1:
-                ccfg["bubble_x"] = st.selectbox("X 变量（数值）", nc, index=0, key="chart_bubble_x")
+                ccfg["bubble_x"] = st.selectbox(T["chart_x_num2"], nc, index=0, key="chart_bubble_x")
             with c2:
                 nc_bub_y = [v for v in nc if v != ccfg["bubble_x"]]
-                ccfg["bubble_y"] = st.selectbox("Y 变量（数值）", nc_bub_y, index=0, key="chart_bubble_y")
+                ccfg["bubble_y"] = st.selectbox(T["chart_bubble_y"], nc_bub_y, index=0, key="chart_bubble_y")
             with c3:
                 nc_bub_s = [v for v in nc if v not in [ccfg["bubble_x"], ccfg["bubble_y"]]]
-                ccfg["bubble_size"] = st.selectbox("气泡大小变量（数值）",
+                ccfg["bubble_size"] = st.selectbox(T["chart_bubble_size"],
                     nc_bub_s if nc_bub_s else nc, index=0, key="chart_bubble_size")
 
     # ── 8. 饼图 ───────────────────────────────────────────────────────────────
     if "饼图" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🥧 饼图</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🥧 {T["ct_pie"]}</div>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
-            ccfg["pie_label"] = st.selectbox("类别变量（各扇区名称）",
+            ccfg["pie_label"] = st.selectbox(T["chart_pie_label"],
                 cat_or_low or ac, index=0, key="chart_pie_label")
         with c2:
-            ccfg["pie_value"] = st.selectbox("数值变量（各扇区大小）",
+            ccfg["pie_value"] = st.selectbox(T["chart_pie_value"],
                 nc, index=nc.index(_default_y) if _default_y in nc else 0,
                 key="chart_pie_value")
 
     # ── 9. 圆环图 ─────────────────────────────────────────────────────────────
     if "圆环图" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">⭕ 圆环图</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">⭕ {T["ct_donut"]}</div>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
-            ccfg["donut_label"] = st.selectbox("类别变量", cat_or_low or ac, index=0, key="chart_donut_label")
+            ccfg["donut_label"] = st.selectbox(T["chart_donut_label"], cat_or_low or ac, index=0, key="chart_donut_label")
         with c2:
-            ccfg["donut_value"] = st.selectbox("数值变量", nc,
+            ccfg["donut_value"] = st.selectbox(T["chart_donut_value"], nc,
                 index=nc.index(_default_y) if _default_y in nc else 0, key="chart_donut_value")
 
     # ── 10. 箱线图 ────────────────────────────────────────────────────────────
     if "箱线图" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🔴 箱线图</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🔴 {T["ct_box"]}</div>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
-            ccfg["box_var"] = st.selectbox("数值变量（必选）", nc,
+            ccfg["box_var"] = st.selectbox(T["chart_box_num"], nc,
                 index=nc.index(_default_y) if _default_y in nc else 0, key="chart_box_var")
         with c2:
             box_grp = [v for v in cat_or_low if v != ccfg.get("box_var")]
-            ccfg["box_group"] = st.selectbox("分组变量（可选）", ["（不分组）"] + box_grp, key="chart_box_group")
-            ccfg["box_group"] = None if ccfg["box_group"] == "（不分组）" else ccfg["box_group"]
+            ccfg["box_group"] = st.selectbox(T["chart_group_opt"], [T["s2_no_group"]] + box_grp, key="chart_box_group")
+            ccfg["box_group"] = None if ccfg["box_group"] == T["s2_no_group"] else ccfg["box_group"]
 
     # ── 11. 小提琴图 ──────────────────────────────────────────────────────────
     if "小提琴图" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🎻 小提琴图</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🎻 {T["ct_violin"]}</div>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
-            ccfg["violin_var"] = st.selectbox("数值变量（必选）", nc,
+            ccfg["violin_var"] = st.selectbox(T["chart_box_num"], nc,
                 index=nc.index(_default_y) if _default_y in nc else 0, key="chart_violin_var")
         with c2:
             vio_grp = [v for v in cat_or_low if v != ccfg.get("violin_var")]
-            ccfg["violin_group"] = st.selectbox("分组变量（可选）", ["（不分组）"] + vio_grp, key="chart_violin_group")
-            ccfg["violin_group"] = None if ccfg["violin_group"] == "（不分组）" else ccfg["violin_group"]
+            ccfg["violin_group"] = st.selectbox(T["chart_group_opt"], [T["s2_no_group"]] + vio_grp, key="chart_violin_group")
+            ccfg["violin_group"] = None if ccfg["violin_group"] == T["s2_no_group"] else ccfg["violin_group"]
 
     # ── 12. 雷达图 ────────────────────────────────────────────────────────────
     if "雷达图" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🕸 雷达图</div>', unsafe_allow_html=True)
-        ccfg["radar_vars"] = st.multiselect("维度变量（数值，选 3-8 个）", nc,
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🕸 {T["ct_radar"]}</div>', unsafe_allow_html=True)
+        ccfg["radar_vars"] = st.multiselect(T["chart_radar_vars"], nc,
             default=nc[:min(5, len(nc))], key="chart_radar_vars",
             help="每个变量对应雷达图的一个维度")
         if len(ccfg.get("radar_vars", [])) < 3:
-            st.warning("雷达图至少需要 3 个维度变量。")
+            st.warning(T["chart_warn_radar3"])
         vio_grp_r = [v for v in cat_or_low if v not in ccfg.get("radar_vars", [])]
-        ccfg["radar_group"] = st.selectbox("分组变量（可选，用于多组对比）",
-            ["（不分组）"] + vio_grp_r, key="chart_radar_group")
-        ccfg["radar_group"] = None if ccfg["radar_group"] == "（不分组）" else ccfg["radar_group"]
+        ccfg["radar_group"] = st.selectbox(T["chart_radar_grp"],
+            [T["s2_no_group"]] + vio_grp_r, key="chart_radar_group")
+        ccfg["radar_group"] = None if ccfg["radar_group"] == T["s2_no_group"] else ccfg["radar_group"]
 
     # ── 13. 热力图 ────────────────────────────────────────────────────────────
     if "热力图" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🌡 热力图</div>', unsafe_allow_html=True)
-        st.caption("热力图将自动使用已选数值变量的 Pearson 相关矩阵，或指定行/列变量。")
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🌡 {T["ct_heatmap"]}</div>', unsafe_allow_html=True)
+        st.caption(T["chart_heat_caption"])
         hm_opts = ["自动（使用相关矩阵）"] + nc
-        ccfg["heatmap_vars"] = st.multiselect("参与热力图的数值变量（留空则自动）",
+        ccfg["heatmap_vars"] = st.multiselect(T["chart_heat_sel"],
             nc, default=[], key="chart_heatmap_vars")
 
     # ── 14. 变化排序图 ────────────────────────────────────────────────────────
     if "变化排序图" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🟠 变化排序图</div>', unsafe_allow_html=True)
-        ccfg["rank_var"] = st.selectbox("排序变量（数值变量）", nc,
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">🟠 {T["ct_rank"]}</div>', unsafe_allow_html=True)
+        ccfg["rank_var"] = st.selectbox(T["chart_rank_var"], nc,
             index=nc.index(_default_y) if _default_y in nc else 0, key="chart_rank_var")
 
     # ── 15. 组合图（柱+线）────────────────────────────────────────────────────
     if "组合图（柱+线）" in chart_types_sel:
-        st.markdown('<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">📊+📈 组合图（柱+线）</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.72rem;color:#a8b4d0;font-weight:600;margin:0.8rem 0 0.3rem 0;">📊+📈 {T["ct_combo"]}</div>', unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
         with c1:
-            ccfg["combo_x"] = st.selectbox("X 轴（分类/时间）",
+            ccfg["combo_x"] = st.selectbox(T["chart_combo_x"],
                 (time_c + cat_or_low) or ac, index=0, key="chart_combo_x")
         with c2:
             nc_combo = [v for v in nc if v != ccfg.get("combo_x")]
-            ccfg["combo_bar_y"] = st.selectbox("柱状 Y（数值）",
+            ccfg["combo_bar_y"] = st.selectbox(T["chart_combo_bar"],
                 nc_combo or nc, index=0, key="chart_combo_bar_y")
         with c3:
             nc_line = [v for v in nc if v not in [ccfg.get("combo_x"), ccfg.get("combo_bar_y")]]
-            ccfg["combo_line_y"] = st.selectbox("折线 Y（数值，双轴）",
+            ccfg["combo_line_y"] = st.selectbox(T["chart_combo_line"],
                 nc_line or nc, index=0, key="chart_combo_line_y")
 
     # ── 校验 ─────────────────────────────────────────────────────────────────
     if "折线图" in chart_types_sel and not ccfg.get("line_y"):
-        st.error("折线图至少需要 1 个 Y 变量。")
+        st.error(T["chart_warn_min1"])
     if "散点图" in chart_types_sel and len(nc) >= 2:
         if not ccfg.get("scatter_x") or not ccfg.get("scatter_y"):
-            st.error("散点图需同时选择 X 和 Y 变量。")
+            st.error(T["chart_warn_sc_xy"])
     if "雷达图" in chart_types_sel and len(ccfg.get("radar_vars", [])) < 3:
-        st.error("雷达图需要至少 3 个维度变量。")
+        st.error(T["chart_warn_radar_e"])
 
     st.markdown("</div>", unsafe_allow_html=True)
 
     # ── 导航按钮 ──────────────────────────────────────────────────────────────
     col_back, col_regen, col_confirm = st.columns([1, 1, 1])
     with col_back:
-        if st.button("← 返回修改问题"):
+        if st.button(T["s2_back"]):
             st.session_state.step = 1
             st.rerun()
     with col_regen:
-        if st.button("↺ 重新生成方案"):
+        if st.button(T["s2_regen"]):
             st.session_state.plan = None
             st.rerun()
     with col_confirm:
-        if st.button("✓ 确认方案，开始分析 →", width='stretch'):
+        if st.button(T["s2_confirm"], width='stretch'):
             if not chosen_types:
-                st.error("请至少选择一种分析类型。")
+                st.error(T["s2_err_type"])
             else:
                 # 写入 session
-                st.session_state.confirmed_analysis_types = chosen_types
+                # 始终以中文存储，保证后续判断逻辑一致
+                st.session_state.confirmed_analysis_types = [_en2zh.get(t,t) for t in chosen_types]
                 st.session_state.confirmed_desc_vars      = cfg.get("desc_vars", [])
                 st.session_state.confirmed_target_vars    = cfg.get("target_vars", [])
                 st.session_state.confirmed_group_var      = cfg.get("group_var")
@@ -1828,7 +2495,8 @@ elif st.session_state.step == 2:
                 st.session_state.confirmed_y              = cfg.get("reg_y")
                 st.session_state.confirmed_x              = cfg.get("reg_x", [])
                 st.session_state.confirmed_scatter        = cfg.get("scatter_x")
-                st.session_state.chart_types              = chart_types_sel
+                # 图表类型始终存中文
+                st.session_state.chart_types = [_ct_label2zh.get(t, t) for t in chart_types_sel]
                 st.session_state.chart_config             = ccfg
                 st.session_state.analysis_done            = False
                 st.session_state.reg_results              = None
@@ -1840,15 +2508,19 @@ elif st.session_state.step == 2:
 # STEP 3 · 分析结果与解释
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.step == 3:
-    phase_header("03", "分析结果与解释")
+    T = _get_T()
+    phase_header("03", T["s3_title"])
 
     question      = st.session_state.question
     df            = st.session_state.df
-    chosen_types  = st.session_state.confirmed_analysis_types
+    chosen_types_raw = st.session_state.confirmed_analysis_types
+    # 统一转成中文类型名用于逻辑判断（兼容中英文切换后的存储值）
+    _type_map_en2zh = {"Descriptive Stats":"描述性统计","Comparison":"对比分析","Trend Analysis":"趋势分析","Correlation":"相关性分析","Regression":"回归分析"}
+    chosen_types = [_type_map_en2zh.get(t,t) for t in chosen_types_raw]
     miss_pct_all  = df.isnull().sum().sum() / df.size * 100
 
     st.markdown(
-        f'<div class="question-display">🔍 研究问题：{question}</div>',
+        f'<div class="question-display">{T["s3_q_prefix"]}{question}</div>',
         unsafe_allow_html=True,
     )
 
@@ -1870,60 +2542,76 @@ elif st.session_state.step == 3:
 
     # ── A · 描述性统计 ────────────────────────────────────────────────────────
     if "描述性统计" in chosen_types:
-        sub_header("A · 描述性统计")
+        sub_header(T["s3_sec_a"])
         desc_vars = st.session_state.confirmed_desc_vars or \
                     df.select_dtypes(include=np.number).columns.tolist()[:4]
         num_df  = df[desc_vars].select_dtypes(include=np.number)
+        # 内部始终用固定英文键，display用翻译列名
         desc    = num_df.describe().T
-        desc["偏度"] = num_df.skew()
-        desc["峰度"] = num_df.kurt()
-        desc.columns = ["样本量", "均值", "标准差", "最小值", "25%分位",
-                         "中位数", "75%分位", "最大值", "偏度", "峰度"]
+        desc["_skew"] = num_df.skew()
+        desc["_kurt"] = num_df.kurt()
+        desc.columns = ["_n","_mean","_std","_min","_p25","_med","_p75","_max","_skew","_kurt"]
         desc = desc.round(4)
+        # 展示时用翻译列名
+        desc_display = desc.copy()
+        desc_display.columns = T["s3_desc_cols"]
 
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.dataframe(desc, width='stretch')
+        st.dataframe(desc_display, width='stretch')
         st.markdown("</div>", unsafe_allow_html=True)
 
         focus_var    = desc_vars[0] if desc_vars else ""
         stats_snip   = {}
         for c in desc_vars:
             if c in desc.index:
-                stats_snip[c] = {k: desc.loc[c, k]
-                                 for k in ["均值", "标准差", "中位数", "偏度", "峰度"]}
-        fb_desc = fallback_desc(stats_snip, focus_var)
+                stats_snip[c] = {
+                    "均值": desc.loc[c,"_mean"], "标准差": desc.loc[c,"_std"],
+                    "中位数": desc.loc[c,"_med"], "偏度": desc.loc[c,"_skew"],
+                    "峰度": desc.loc[c,"_kurt"],
+                }
+        fb_desc = fallback_desc(stats_snip, focus_var, lang=st.session_state.get("lang","zh"))
         desc_summary = "; ".join([
-            f"{c} 均值={desc.loc[c,'均值']:.2f} 偏度={desc.loc[c,'偏度']:.2f}"
+            f"{c} mean={desc.loc[c,'_mean']:.2f} skew={desc.loc[c,'_skew']:.2f}"
             for c in desc_vars if c in desc.index
         ])
 
-        with st.spinner("✦ 正在生成描述性统计解读…"):
+        with st.spinner(T["s3_spin_desc"]):
             text, is_ai = ai_desc_interp(
                 question,
                 json.dumps(stats_snip, ensure_ascii=False, default=str),
                 focus_var,
                 fb_desc,
+                lang=st.session_state.get("lang","zh"),
             )
-        render_ai("描述性统计解读", text, is_ai)
+        render_ai(T["s3_lbl_desc"], text, is_ai)
         st.markdown("<hr class='divider'>", unsafe_allow_html=True)
 
     # ── B · 对比分析 / 趋势分析 ───────────────────────────────────────────────
     if "对比分析" in chosen_types or "趋势分析" in chosen_types:
-        label_bt = "B · 对比分析 / 趋势分析"
+        label_bt = T["s3_sec_b3"]
         if "对比分析" in chosen_types and "趋势分析" not in chosen_types:
-            label_bt = "B · 对比分析"
+            label_bt = T["s3_sec_b"]
         elif "趋势分析" in chosen_types and "对比分析" not in chosen_types:
-            label_bt = "B · 趋势分析"
+            label_bt = T["s3_sec_b2"]
         sub_header(label_bt)
 
         target_vars = st.session_state.confirmed_target_vars
         group_var   = st.session_state.confirmed_group_var
         time_var    = st.session_state.get("confirmed_time_var")
-        chart_types = st.session_state.get("chart_types", [])
+        chart_types_raw = st.session_state.get("chart_types", [])
+        # 图表类型名映射为中文用于判断（支持英文模式下的存储值）
+        _ct_en2zh = {
+            "Bar Chart":"柱状图","Horizontal Bar":"条形图","Grouped Bar":"分组柱状图",
+            "Line Chart":"折线图","Area Chart":"面积图","Scatter Plot":"散点图",
+            "Bubble Chart":"气泡图","Pie Chart":"饼图","Donut Chart":"圆环图",
+            "Box Plot":"箱线图","Violin Plot":"小提琴图","Radar Chart":"雷达图",
+            "Heatmap":"热力图","Ranked Change Chart":"变化排序图","Combined Chart":"组合图（柱+线）",
+        }
+        chart_types = [_ct_en2zh.get(t, t) for t in chart_types_raw]
         ccfg        = st.session_state.get("chart_config", {})
 
         if not target_vars:
-            st.info("未配置目标变量，请返回方案步骤选择。")
+            st.info(T["s3_no_target"])
         else:
             any_chart_drawn = False
 
@@ -1931,7 +2619,7 @@ elif st.session_state.step == 3:
             if "柱状图" in chart_types and ccfg.get("bar_x") and ccfg.get("bar_y"):
                 bx, by = ccfg["bar_x"], ccfg["bar_y"]
                 if bx in df.columns and by in df.columns:
-                    st.markdown(f"**柱状图：{by} 按 {bx}**")
+                    st.markdown(f"**{T['ct_bar']}：{by} {T['ct_by']} {bx}**")
                     try:
                         grp = df.groupby(bx)[by].mean().reset_index()
                         fig, ax = plt.subplots(figsize=(8, 3.8))
@@ -1940,7 +2628,7 @@ elif st.session_state.step == 3:
                         for bar, val in zip(bars, grp[by]):
                             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() * 1.01,
                                     f"{val:.2f}", ha="center", va="bottom", fontsize=8, color=PLOT_FG)
-                        ax.set_xlabel(bx); ax.set_ylabel(by); ax.set_title(f"{by} 均值（按 {bx}）")
+                        ax.set_xlabel(bx); ax.set_ylabel(by); ax.set_title(f"{by} {T["chart_mean"]}（{T["ct_by"]} {bx}）")
                         plt.xticks(rotation=20, ha="right")
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_1.png")
@@ -1951,13 +2639,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         any_chart_drawn = True
                     except Exception as e:
-                        st.warning(f"柱状图绘制失败：{e}")
+                        st.warning(T["ct_bar"]+T["ct_fail"]+str(e))
 
             # ── 分组柱状图 ────────────────────────────────────────────────────
             if "分组柱状图" in chart_types and ccfg.get("gbar_x") and ccfg.get("gbar_y"):
                 gx, gy, gg = ccfg["gbar_x"], ccfg["gbar_y"], ccfg.get("gbar_group")
                 if gx in df.columns and gy in df.columns:
-                    st.markdown(f"**分组柱状图：{gy} 按 {gx}{'（分组：'+gg+')' if gg else ''}**")
+                    st.markdown(f"**{T['ct_gbar']}：{gy} {T['ct_by']} {gx}{(T['ct_grouped']+gg+')') if gg else ''}**")
                     try:
                         import matplotlib
                         if gg and gg in df.columns:
@@ -1982,7 +2670,7 @@ elif st.session_state.step == 3:
                             fig, ax = plt.subplots(figsize=(8, 3.8))
                             apply_plot_style(fig, ax)
                             ax.bar(grp[gx].astype(str), grp[gy], color=ACCENT, alpha=0.85)
-                        ax.set_xlabel(gx); ax.set_ylabel(gy); ax.set_title(f"{gy} 分组柱状图")
+                        ax.set_xlabel(gx); ax.set_ylabel(gy); ax.set_title(f"{gy} {T["ct_gbar"]}")
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_2.png")
                         fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -1992,13 +2680,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         any_chart_drawn = True
                     except Exception as e:
-                        st.warning(f"分组柱状图绘制失败：{e}")
+                        st.warning(T["ct_gbar"]+T["ct_fail"]+str(e))
 
             # ── 折线图 ────────────────────────────────────────────────────────
             if "折线图" in chart_types and ccfg.get("line_x") and ccfg.get("line_y"):
                 lx, ly_list = ccfg["line_x"], ccfg["line_y"]
                 if lx in df.columns and ly_list:
-                    st.markdown(f"**折线图：{'、'.join(ly_list[:4])} 随 {lx} 变化**")
+                    st.markdown(f"**{T['ct_line']}：{'、'.join(ly_list[:4])} {T['ct_trend']} {lx}**")
                     try:
                         df_l = df[[lx] + ly_list[:4]].dropna().sort_values(lx)
                         fig, ax = plt.subplots(figsize=(9, 3.8))
@@ -2010,7 +2698,7 @@ elif st.session_state.step == 3:
                         ax.set_xlabel(lx)
                         ax.legend(facecolor=PLOT_BG, edgecolor=PLOT_GRID,
                                   labelcolor=PLOT_FG, fontsize=8)
-                        ax.set_title(f"{'、'.join(ly_list[:4])} 趋势折线图")
+                        ax.set_title(f"{'、'.join(ly_list[:4])} {T['ct_line']}")
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_3.png")
                         fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2020,13 +2708,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         any_chart_drawn = True
                     except Exception as e:
-                        st.warning(f"折线图绘制失败：{e}")
+                        st.warning(T["ct_line"]+T["ct_fail"]+str(e))
 
             # ── 箱线图 ────────────────────────────────────────────────────────
             if "箱线图" in chart_types and ccfg.get("box_var"):
                 bv, bg = ccfg["box_var"], ccfg.get("box_group")
                 if bv in df.columns:
-                    st.markdown(f"**箱线图：{bv}{'（按 '+bg+' 分组）' if bg else ''}**")
+                    st.markdown(f"**{T['ct_box']}：{bv}{'（'+T['ct_by']+' '+bg+' 分组）' if bg else ''}**")
                     try:
                         fig, ax = plt.subplots(figsize=(7, 3.8))
                         apply_plot_style(fig, ax)
@@ -2041,13 +2729,13 @@ elif st.session_state.step == 3:
                                 patch.set_facecolor(color); patch.set_alpha(0.7)
                             ax.set_xticklabels(group_labels, rotation=20, ha="right",
                                                fontsize=8, color=PLOT_FG)
-                            ax.set_title(f"{bv} 按 {bg} 箱线图")
+                            ax.set_title(f"{bv} {T["ct_by"]} {bg} {T["ct_box"]}")
                         else:
                             bp = ax.boxplot(df[bv].dropna().values, patch_artist=True,
                                             medianprops=dict(color=ACCENT2, linewidth=2))
                             bp["boxes"][0].set_facecolor(ACCENT); bp["boxes"][0].set_alpha(0.7)
                             ax.set_xticklabels([bv], color=PLOT_FG)
-                            ax.set_title(f"{bv} 箱线图")
+                            ax.set_title(f"{bv} {T["ct_box"]}")
                         ax.set_ylabel(bv)
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_4.png")
@@ -2058,13 +2746,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         any_chart_drawn = True
                     except Exception as e:
-                        st.warning(f"箱线图绘制失败：{e}")
+                        st.warning(T["ct_box"]+T["ct_fail"]+str(e))
 
             # ── 变化排序图 ────────────────────────────────────────────────────
             if "变化排序图" in chart_types and ccfg.get("rank_var"):
                 rv = ccfg["rank_var"]
                 if rv in df.columns:
-                    st.markdown(f"**变化排序图：{rv}**")
+                    st.markdown(f"**{T['ct_rank']}：{rv}**")
                     try:
                         sorted_s = df[rv].dropna().sort_values().reset_index(drop=True)
                         fig, ax = plt.subplots(figsize=(9, 3.6))
@@ -2073,9 +2761,9 @@ elif st.session_state.step == 3:
                                        for v in sorted_s]
                         ax.bar(range(len(sorted_s)), sorted_s.values, color=colors_rank, alpha=0.8)
                         ax.axhline(sorted_s.median(), color=ACCENT, linewidth=1.5,
-                                   linestyle="--", label=f"中位数={sorted_s.median():.2f}")
-                        ax.set_xlabel("样本排序（从小到大）"); ax.set_ylabel(rv)
-                        ax.set_title(f"{rv} 变化排序图")
+                                   linestyle="--", label=f"{T.get('chart_median','中位数')}={sorted_s.median():.2f}")
+                        ax.set_xlabel(T.get("chart_rank_x","样本排序（从小到大）")); ax.set_ylabel(rv)
+                        ax.set_title(f"{rv} {T["ct_rank"]}")
                         ax.legend(facecolor=PLOT_BG, edgecolor=PLOT_GRID,
                                   labelcolor=PLOT_FG, fontsize=8)
                         plt.tight_layout(pad=0.3)
@@ -2087,13 +2775,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         any_chart_drawn = True
                     except Exception as e:
-                        st.warning(f"变化排序图绘制失败：{e}")
+                        st.warning(T["ct_rank"]+T["ct_fail"]+str(e))
 
             # ── 条形图（横向）────────────────────────────────────────────────
             if "条形图" in chart_types and ccfg.get("hbar_y") and ccfg.get("hbar_x"):
                 hy, hx = ccfg["hbar_y"], ccfg["hbar_x"]
                 if hy in df.columns and hx in df.columns:
-                    st.markdown(f"**条形图：{hx} 按 {hy}（横向）**")
+                    st.markdown(f"**{T['ct_hbar']}：{hx} {T['ct_by']} {hy}**")
                     try:
                         grp = df.groupby(hy)[hx].mean().reset_index().sort_values(hx)
                         fig, ax = plt.subplots(figsize=(8, max(3.5, len(grp) * 0.4)))
@@ -2102,7 +2790,7 @@ elif st.session_state.step == 3:
                         ax.barh(grp[hy].astype(str), grp[hx], color=colors_hb, alpha=0.85)
                         for i, val in enumerate(grp[hx]):
                             ax.text(val * 1.01, i, f"{val:.2f}", va="center", fontsize=8, color=PLOT_FG)
-                        ax.set_xlabel(hx); ax.set_title(f"{hx} 均值（按 {hy}，横向排列）")
+                        ax.set_xlabel(hx); ax.set_title(f"{hx} {T["chart_mean"]}（{T["ct_by"]} {hy}）")
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_6.png")
                         fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2112,13 +2800,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         any_chart_drawn = True
                     except Exception as e:
-                        st.warning(f"条形图绘制失败：{e}")
+                        st.warning(T["ct_hbar"]+T["ct_fail"]+str(e))
 
             # ── 面积图 ────────────────────────────────────────────────────────
             if "面积图" in chart_types and ccfg.get("area_x") and ccfg.get("area_y"):
                 ax_col, ay_list = ccfg["area_x"], ccfg["area_y"]
                 if ax_col in df.columns and ay_list:
-                    st.markdown(f"**面积图：{'、'.join(ay_list[:4])} 随 {ax_col} 变化**")
+                    st.markdown(f"**{T['ct_area']}：{'、'.join(ay_list[:4])} {T['ct_trend']} {ax_col}**")
                     try:
                         df_a = df[[ax_col] + ay_list[:4]].dropna().sort_values(ax_col)
                         fig, ax = plt.subplots(figsize=(9, 3.8))
@@ -2130,7 +2818,7 @@ elif st.session_state.step == 3:
                             ax.plot(df_a[ax_col], df_a[av], color=area_colors[i], linewidth=1.5)
                         ax.set_xlabel(ax_col)
                         ax.legend(facecolor=PLOT_BG, edgecolor=PLOT_GRID, labelcolor=PLOT_FG, fontsize=8)
-                        ax.set_title(f"面积图：{'、'.join(ay_list[:4])}")
+                        ax.set_title(f"{T['ct_area']}：{'、'.join(ay_list[:4])}")
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_7.png")
                         fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2140,14 +2828,14 @@ elif st.session_state.step == 3:
                         plt.close()
                         any_chart_drawn = True
                     except Exception as e:
-                        st.warning(f"面积图绘制失败：{e}")
+                        st.warning(T["ct_area"]+T["ct_fail"]+str(e))
 
             # ── 气泡图 ────────────────────────────────────────────────────────
             if "气泡图" in chart_types and ccfg.get("bubble_x") and ccfg.get("bubble_y"):
                 bx2 = ccfg["bubble_x"]; by2 = ccfg["bubble_y"]
                 bs  = ccfg.get("bubble_size")
                 if bx2 in df.columns and by2 in df.columns:
-                    st.markdown(f"**气泡图：{bx2} vs {by2}（气泡大小：{bs or '统一'}）**")
+                    st.markdown(f"**{T['ct_bubble']}：{bx2} {T['ct_vs']} {by2}（{bs or T['ct_unified']}）**")
                     try:
                         valid = df[[bx2, by2] + ([bs] if bs and bs in df.columns else [])].dropna()
                         sizes = (valid[bs] / valid[bs].max() * 800 + 50).values if bs and bs in df.columns else 80
@@ -2157,7 +2845,7 @@ elif st.session_state.step == 3:
                                         c=valid[bx2], cmap="Blues", alpha=0.7, edgecolors=PLOT_BG, linewidth=0.5)
                         plt.colorbar(sc, ax=ax, label=bx2, fraction=0.03, pad=0.02)
                         ax.set_xlabel(bx2); ax.set_ylabel(by2)
-                        ax.set_title(f"气泡图：{by2} vs {bx2}")
+                        ax.set_title(f"{T["ct_bubble"]}：{by2} vs {bx2}")
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_8.png")
                         fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2167,13 +2855,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         any_chart_drawn = True
                     except Exception as e:
-                        st.warning(f"气泡图绘制失败：{e}")
+                        st.warning(T["ct_bubble"]+T["ct_fail"]+str(e))
 
             # ── 饼图 ──────────────────────────────────────────────────────────
             if "饼图" in chart_types and ccfg.get("pie_label") and ccfg.get("pie_value"):
                 pl, pv = ccfg["pie_label"], ccfg["pie_value"]
                 if pl in df.columns and pv in df.columns:
-                    st.markdown(f"**饼图：{pv} 按 {pl} 占比**")
+                    st.markdown(f"**{T['ct_pie']}：{pv} {T['ct_by']} {pl} {T['ct_share']}**")
                     try:
                         pie_data = df.groupby(pl)[pv].sum().reset_index()
                         pie_data = pie_data[pie_data[pv] > 0].nlargest(10, pv)
@@ -2190,7 +2878,7 @@ elif st.session_state.step == 3:
                         )
                         for at in autotexts:
                             at.set_color(PLOT_BG); at.set_fontsize(7)
-                        ax.set_title(f"{pv} 占比分布（按 {pl}）", color=PLOT_FG)
+                        ax.set_title(f"{pv} {T["ct_share"]}（{T["ct_by"]} {pl}）", color=PLOT_FG)
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_9.png")
                         fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2200,13 +2888,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         any_chart_drawn = True
                     except Exception as e:
-                        st.warning(f"饼图绘制失败：{e}")
+                        st.warning(T["ct_pie"]+T["ct_fail"]+str(e))
 
             # ── 圆环图 ────────────────────────────────────────────────────────
             if "圆环图" in chart_types and ccfg.get("donut_label") and ccfg.get("donut_value"):
                 dl, dv = ccfg["donut_label"], ccfg["donut_value"]
                 if dl in df.columns and dv in df.columns:
-                    st.markdown(f"**圆环图：{dv} 按 {dl} 占比**")
+                    st.markdown(f"**{T['ct_donut']}：{dv} {T['ct_by']} {dl} {T['ct_share']}**")
                     try:
                         donut_data = df.groupby(dl)[dv].sum().reset_index()
                         donut_data = donut_data[donut_data[dv] > 0].nlargest(10, dv)
@@ -2223,7 +2911,7 @@ elif st.session_state.step == 3:
                         )
                         for at in autotexts:
                             at.set_color(PLOT_BG); at.set_fontsize(7)
-                        ax.set_title(f"{dv} 圆环图（按 {dl}）", color=PLOT_FG)
+                        ax.set_title(f"{dv} {T["ct_donut"]}（{T["ct_by"]} {dl}）", color=PLOT_FG)
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_10.png")
                         fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2233,13 +2921,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         any_chart_drawn = True
                     except Exception as e:
-                        st.warning(f"圆环图绘制失败：{e}")
+                        st.warning(T["ct_donut"]+T["ct_fail"]+str(e))
 
             # ── 小提琴图 ──────────────────────────────────────────────────────
             if "小提琴图" in chart_types and ccfg.get("violin_var"):
                 vv = ccfg["violin_var"]; vg = ccfg.get("violin_group")
                 if vv in df.columns:
-                    st.markdown(f"**小提琴图：{vv}{'（按 '+vg+' 分组）' if vg else ''}**")
+                    st.markdown(f"**{T['ct_violin']}：{vv}{'（'+T['ct_by']+' '+vg+' 分组）' if vg else ''}**")
                     try:
                         import matplotlib.patches as mpatches
                         fig, ax = plt.subplots(figsize=(8, 4))
@@ -2260,7 +2948,7 @@ elif st.session_state.step == 3:
                             ax.set_xticks(range(len(groups)))
                             ax.set_xticklabels([str(g) for g in groups], rotation=20,
                                                ha="right", fontsize=8, color=PLOT_FG)
-                            ax.set_title(f"{vv} 按 {vg} 小提琴图")
+                            ax.set_title(f"{vv} {T["ct_by"]} {vg} {T["ct_violin"]}")
                         else:
                             vparts = ax.violinplot([df[vv].dropna().values],
                                                    showmedians=True, showmeans=False)
@@ -2268,7 +2956,7 @@ elif st.session_state.step == 3:
                                 pc.set_facecolor(ACCENT); pc.set_alpha(0.7)
                             vparts["cmedians"].set_color(ACCENT2); vparts["cmedians"].set_linewidth(2)
                             ax.set_xticks([1]); ax.set_xticklabels([vv], color=PLOT_FG)
-                            ax.set_title(f"{vv} 小提琴图")
+                            ax.set_title(f"{vv} {T["ct_violin"]}")
                         ax.set_ylabel(vv)
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_11.png")
@@ -2279,12 +2967,12 @@ elif st.session_state.step == 3:
                         plt.close()
                         any_chart_drawn = True
                     except Exception as e:
-                        st.warning(f"小提琴图绘制失败：{e}")
+                        st.warning(T["ct_violin"]+T["ct_fail"]+str(e))
 
             # ── 雷达图 ────────────────────────────────────────────────────────
             if "雷达图" in chart_types and ccfg.get("radar_vars") and len(ccfg["radar_vars"]) >= 3:
                 rvars = ccfg["radar_vars"]; rgrp = ccfg.get("radar_group")
-                st.markdown(f"**雷达图：{'、'.join(rvars)}{'（按 '+rgrp+' 分组）' if rgrp else ''}**")
+                st.markdown(f"**{T['ct_radar']}：{'、'.join(rvars)}{'（'+T['ct_by']+' '+rgrp+' 分组）' if rgrp else ''}**")
                 try:
                     angles = np.linspace(0, 2 * np.pi, len(rvars), endpoint=False).tolist()
                     angles += angles[:1]
@@ -2316,7 +3004,7 @@ elif st.session_state.step == 3:
                         vals = norm_df[rvars].mean().tolist() + [norm_df[rvars].mean().tolist()[0]]
                         ax.plot(angles, vals, color=ACCENT, linewidth=2)
                         ax.fill(angles, vals, alpha=0.2, color=ACCENT)
-                    ax.set_title(f"雷达图（均值标准化）", color=PLOT_FG, pad=20)
+                    ax.set_title(f"{T["ct_radar"]}（{T.get("chart_mean","均值")}）", color=PLOT_FG, pad=20)
                     plt.tight_layout(pad=0.3)
                     _img_path = os.path.join(_TMPDIR, "_chart_12.png")
                     fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2326,14 +3014,14 @@ elif st.session_state.step == 3:
                     plt.close()
                     any_chart_drawn = True
                 except Exception as e:
-                    st.warning(f"雷达图绘制失败：{e}")
+                    st.warning(T["ct_radar"]+T["ct_fail"]+str(e))
 
             # ── 热力图 ────────────────────────────────────────────────────────
             if "热力图" in chart_types:
                 hm_vars = ccfg.get("heatmap_vars") or target_vars
                 hm_vars = [v for v in hm_vars if v in df.columns and v in df.select_dtypes(include=np.number).columns]
                 if len(hm_vars) >= 2:
-                    st.markdown(f"**热力图：{' · '.join(hm_vars[:10])} 相关矩阵**")
+                    st.markdown(f"**{T['ct_heatmap']}：{' · '.join(hm_vars[:10])} {T['chart_corr_title'] if False else T.get('chart_heat_sub','相关矩阵')}**")
                     try:
                         hm_df = df[hm_vars[:10]].corr().round(2)
                         fig, ax = plt.subplots(figsize=(max(5, len(hm_vars)*1.1), max(4, len(hm_vars)*0.9)))
@@ -2348,7 +3036,7 @@ elif st.session_state.step == 3:
                                 val = hm_df.values[i, j]
                                 ax.text(j, i, f"{val:.2f}", ha="center", va="center",
                                         fontsize=7, color="white" if abs(val) > 0.5 else PLOT_FG)
-                        ax.set_title("热力图（Pearson 相关系数）", color=PLOT_FG)
+                        ax.set_title(T["corr_heatmap"], color=PLOT_FG)
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_13.png")
                         fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2358,13 +3046,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         any_chart_drawn = True
                     except Exception as e:
-                        st.warning(f"热力图绘制失败：{e}")
+                        st.warning(T["ct_heatmap"]+T["ct_fail"]+str(e))
 
             # ── 组合图（柱+线）───────────────────────────────────────────────
             if "组合图（柱+线）" in chart_types and ccfg.get("combo_x") and ccfg.get("combo_bar_y") and ccfg.get("combo_line_y"):
                 cx = ccfg["combo_x"]; cby = ccfg["combo_bar_y"]; cly = ccfg["combo_line_y"]
                 if cx in df.columns and cby in df.columns and cly in df.columns:
-                    st.markdown(f"**组合图：{cby}（柱）+ {cly}（线）按 {cx}**")
+                    st.markdown(f"**{T['ct_combo']}：{cby}（{T['ct_bar']}）+ {cly}（{T['ct_line']}）{T['ct_by']} {cx}**")
                     try:
                         grp_c = df.groupby(cx)[[cby, cly]].mean().reset_index()
                         fig, ax1 = plt.subplots(figsize=(9, 4))
@@ -2389,7 +3077,7 @@ elif st.session_state.step == 3:
                         ax1.legend(lines1 + lines2, labels1 + labels2,
                                    facecolor=PLOT_BG, edgecolor=PLOT_GRID,
                                    labelcolor=PLOT_FG, fontsize=8, loc="upper left")
-                        ax1.set_title(f"组合图：{cby} 与 {cly} 对比")
+                        ax1.set_title(f"{T['ct_combo']}：{cby} {T['ct_vs']} {cly}")
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_14.png")
                         fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2399,11 +3087,11 @@ elif st.session_state.step == 3:
                         plt.close()
                         any_chart_drawn = True
                     except Exception as e:
-                        st.warning(f"组合图绘制失败：{e}")
+                        st.warning(T["ct_combo"]+T["ct_fail"]+str(e))
             if not any_chart_drawn:
                 plot_vars = target_vars[:8]
                 if len(plot_vars) >= 2:
-                    st.markdown(f"**变量对比：{' · '.join(plot_vars)}**")
+                    st.markdown(f"**{T['ct_mean_cmp']}：{' · '.join(plot_vars)}**")
                     fig, ax = plt.subplots(figsize=(max(8, len(plot_vars) * 1.2), 4.2))
                     apply_plot_style(fig, ax)
                     x     = np.arange(len(plot_vars))
@@ -2424,8 +3112,8 @@ elif st.session_state.step == 3:
                     ax.set_xticks(x)
                     ax.set_xticklabels(plot_vars, rotation=20, ha="right",
                                        fontsize=8, color=PLOT_FG)
-                    ax.set_ylabel("均值（±标准差）")
-                    ax.set_title("各变量均值对比")
+                    ax.set_ylabel(T["ct_mean_y"])
+                    ax.set_title(T["ct_mean_title"])
                     plt.tight_layout(pad=0.3)
                     _img_path = os.path.join(_TMPDIR, "_chart_15.png")
                     fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2434,16 +3122,16 @@ elif st.session_state.step == 3:
                     st.pyplot(fig, width='stretch')
                     plt.close()
                 else:
-                    st.info("请至少选择 2 个变量以生成对比图。")
+                    st.info(T["ct_min2"])
 
         st.markdown("<hr class='divider'>", unsafe_allow_html=True)
 
     # ── C · 相关性分析 ────────────────────────────────────────────────────────
     if "相关性分析" in chosen_types:
-        sub_header("C · 相关性分析")
+        sub_header(T["s3_sec_c"])
         corr_vars = st.session_state.confirmed_corr_vars
         if len(corr_vars) < 2:
-            st.info("相关性分析需要至少 2 个变量，请返回方案步骤配置。")
+            st.info(T["s3_no_corr"])
         else:
             corr_matrix = df[corr_vars].corr().round(3)
             # 相关系数热力图
@@ -2462,7 +3150,7 @@ elif st.session_state.step == 3:
                     val = corr_matrix.values[i, j]
                     ax.text(j, i, f"{val:.2f}", ha="center", va="center",
                             fontsize=7, color="white" if abs(val) > 0.5 else PLOT_FG)
-            ax.set_title("Pearson 相关系数热力图", color=PLOT_FG)
+            ax.set_title(T["corr_heatmap"], color=PLOT_FG)
             plt.tight_layout(pad=0.3)
             _img_path = os.path.join(_TMPDIR, "_chart_16.png")
             fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2488,21 +3176,22 @@ elif st.session_state.step == 3:
             fb_corr = fallback_corr(top_pairs)
             corr_summary = "；".join([f"{v1}~{v2}(r={r:.3f})" for v1, v2, r in top_pairs])
 
-            with st.spinner("✦ 正在生成相关性解读…"):
-                text, is_ai = ai_corr_interp(question, corr_summary, fb_corr)
-            render_ai("相关性分析解读", text, is_ai)
+            with st.spinner(T["s3_spin_corr"]):
+                text, is_ai = ai_corr_interp(question, corr_summary, fb_corr,
+                                             lang=st.session_state.get("lang","zh"))
+            render_ai(T["s3_lbl_corr"], text, is_ai)
 
         st.markdown("<hr class='divider'>", unsafe_allow_html=True)
 
     # ── D · 回归分析 ──────────────────────────────────────────────────────────
     if "回归分析" in chosen_types:
-        sub_header("D · 回归分析")
+        sub_header(T["s3_sec_d"])
         y_var  = st.session_state.confirmed_y
         x_vars = st.session_state.confirmed_x
         scatter_x = st.session_state.confirmed_scatter
 
         if not y_var or not x_vars:
-            st.info("回归分析需要配置因变量和自变量，请返回方案步骤。")
+            st.info(T["s3_no_reg"])
         else:
             series = df[y_var].dropna()
             chart_types = st.session_state.get("chart_types", [])
@@ -2516,7 +3205,7 @@ elif st.session_state.step == 3:
             if "散点图" in chart_types and ccfg.get("scatter_x") and ccfg.get("scatter_y"):
                 sx, sy = ccfg["scatter_x"], ccfg["scatter_y"]
                 if sx in df.columns and sy in df.columns:
-                    st.markdown(f"**散点图：{sy} vs {sx}**")
+                    st.markdown(f"**{T['ct_scatter_vs']}：{sy} vs {sx}**")
                     try:
                         fig, ax = plt.subplots(figsize=(6, 3.8))
                         apply_plot_style(fig, ax)
@@ -2526,7 +3215,7 @@ elif st.session_state.step == 3:
                             z = np.polyfit(valid[sx], valid[sy], 1)
                             xs_arr = np.linspace(valid[sx].min(), valid[sx].max(), 200)
                             ax.plot(xs_arr, np.poly1d(z)(xs_arr), color=ACCENT2,
-                                    linewidth=2, linestyle="--", label="趋势线")
+                                    linewidth=2, linestyle="--", label=T.get("chart_trend","趋势线"))
                             ax.legend(facecolor=PLOT_BG, edgecolor=PLOT_GRID, labelcolor=PLOT_FG, fontsize=8)
                             corr_val = float(valid[sx].corr(valid[sy]))
                         ax.set_xlabel(sx); ax.set_ylabel(sy)
@@ -2540,13 +3229,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         reg_charts_drawn = True
                     except Exception as e:
-                        st.warning(f"散点图绘制失败：{e}")
+                        st.warning(T["ct_scatter"]+T["ct_fail"]+str(e))
 
             # 折线图
             if "折线图" in chart_types and ccfg.get("line_x") and ccfg.get("line_y"):
                 lx, ly_list = ccfg["line_x"], ccfg["line_y"]
                 if lx in df.columns and ly_list:
-                    st.markdown(f"**折线图：{'、'.join(ly_list[:4])} 随 {lx} 变化**")
+                    st.markdown(f"**{T['ct_line']}：{'、'.join(ly_list[:4])} {T['ct_trend']} {lx}**")
                     try:
                         df_l = df[[lx] + ly_list[:4]].dropna().sort_values(lx)
                         fig, ax = plt.subplots(figsize=(9, 3.8))
@@ -2556,7 +3245,7 @@ elif st.session_state.step == 3:
                             ax.plot(df_l[lx], df_l[lv], color=lc[i], linewidth=2, label=lv, alpha=0.9)
                         ax.set_xlabel(lx)
                         ax.legend(facecolor=PLOT_BG, edgecolor=PLOT_GRID, labelcolor=PLOT_FG, fontsize=8)
-                        ax.set_title(f"趋势折线图")
+                        ax.set_title(T["ct_line"])
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_18.png")
                         fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2566,13 +3255,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         reg_charts_drawn = True
                     except Exception as e:
-                        st.warning(f"折线图绘制失败：{e}")
+                        st.warning(T["ct_line"]+T["ct_fail"]+str(e))
 
             # 柱状图
             if "柱状图" in chart_types and ccfg.get("bar_x") and ccfg.get("bar_y"):
                 bx, by = ccfg["bar_x"], ccfg["bar_y"]
                 if bx in df.columns and by in df.columns:
-                    st.markdown(f"**柱状图：{by} 按 {bx}**")
+                    st.markdown(f"**{T['ct_bar']}：{by} {T['ct_by']} {bx}**")
                     try:
                         grp = df.groupby(bx)[by].mean().reset_index()
                         fig, ax = plt.subplots(figsize=(8, 3.8))
@@ -2582,7 +3271,7 @@ elif st.session_state.step == 3:
                             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() * 1.01,
                                     f"{val:.2f}", ha="center", va="bottom", fontsize=8, color=PLOT_FG)
                         ax.set_xlabel(bx); ax.set_ylabel(by)
-                        ax.set_title(f"{by} 均值（按 {bx}）")
+                        ax.set_title(f"{by} {T['chart_mean']}（{T['ct_by']} {bx}）")
                         plt.xticks(rotation=20, ha="right")
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_19.png")
@@ -2593,13 +3282,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         reg_charts_drawn = True
                     except Exception as e:
-                        st.warning(f"柱状图绘制失败：{e}")
+                        st.warning(T["ct_bar"]+T["ct_fail"]+str(e))
 
             # 变化排序图
             if "变化排序图" in chart_types and ccfg.get("rank_var"):
                 rv = ccfg["rank_var"]
                 if rv in df.columns:
-                    st.markdown(f"**变化排序图：{rv}**")
+                    st.markdown(f"**{T['ct_rank']}：{rv}**")
                     try:
                         sorted_s = df[rv].dropna().sort_values().reset_index(drop=True)
                         fig, ax = plt.subplots(figsize=(9, 3.6))
@@ -2607,9 +3296,9 @@ elif st.session_state.step == 3:
                         cr = [ACCENT2 if v >= sorted_s.median() else "#f06b6b" for v in sorted_s]
                         ax.bar(range(len(sorted_s)), sorted_s.values, color=cr, alpha=0.8)
                         ax.axhline(sorted_s.median(), color=ACCENT, linewidth=1.5, linestyle="--",
-                                   label=f"中位数={sorted_s.median():.2f}")
-                        ax.set_xlabel("样本排序（从小到大）"); ax.set_ylabel(rv)
-                        ax.set_title(f"{rv} 变化排序图")
+                                   label=f"{T.get('chart_median','中位数')}={sorted_s.median():.2f}")
+                        ax.set_xlabel(T.get("chart_rank_x","样本排序（从小到大）")); ax.set_ylabel(rv)
+                        ax.set_title(f"{rv} {T["ct_rank"]}")
                         ax.legend(facecolor=PLOT_BG, edgecolor=PLOT_GRID, labelcolor=PLOT_FG, fontsize=8)
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_20.png")
@@ -2620,13 +3309,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         reg_charts_drawn = True
                     except Exception as e:
-                        st.warning(f"变化排序图绘制失败：{e}")
+                        st.warning(T["ct_rank"]+T["ct_fail"]+str(e))
 
             # 箱线图
             if "箱线图" in chart_types and ccfg.get("box_var"):
                 bv, bg = ccfg["box_var"], ccfg.get("box_group")
                 if bv in df.columns:
-                    st.markdown(f"**箱线图：{bv}{'（按 '+bg+' 分组）' if bg else ''}**")
+                    st.markdown(f"**{T['ct_box']}：{bv}{'（'+T['ct_by']+' '+bg+' 分组）' if bg else ''}**")
                     try:
                         fig, ax = plt.subplots(figsize=(7, 3.8))
                         apply_plot_style(fig, ax)
@@ -2638,13 +3327,13 @@ elif st.session_state.step == 3:
                             for patch, color in zip(bp["boxes"], cb * 10):
                                 patch.set_facecolor(color); patch.set_alpha(0.7)
                             ax.set_xticklabels(gl, rotation=20, ha="right", fontsize=8, color=PLOT_FG)
-                            ax.set_title(f"{bv} 按 {bg} 箱线图")
+                            ax.set_title(f"{bv} {T["ct_by"]} {bg} {T["ct_box"]}")
                         else:
                             bp = ax.boxplot(df[bv].dropna().values, patch_artist=True,
                                             medianprops=dict(color=ACCENT2, linewidth=2))
                             bp["boxes"][0].set_facecolor(ACCENT); bp["boxes"][0].set_alpha(0.7)
                             ax.set_xticklabels([bv], color=PLOT_FG)
-                            ax.set_title(f"{bv} 箱线图")
+                            ax.set_title(f"{bv} {T["ct_box"]}")
                         ax.set_ylabel(bv)
                         plt.tight_layout(pad=0.3)
                         _img_path = os.path.join(_TMPDIR, "_chart_21.png")
@@ -2655,13 +3344,13 @@ elif st.session_state.step == 3:
                         plt.close()
                         reg_charts_drawn = True
                     except Exception as e:
-                        st.warning(f"箱线图绘制失败：{e}")
+                        st.warning(T["ct_box"]+T["ct_fail"]+str(e))
 
             # 兜底：若用户未选任何图表，保留原分布直方图 + 散点图
             if not reg_charts_drawn:
                 col_l, col_r = st.columns(2)
                 with col_l:
-                    st.markdown(f"**{y_var} 的分布**")
+                    st.markdown(f"**{y_var} {T['chart_dist_sub']}**")
                     fig, ax = plt.subplots(figsize=(5.5, 3.8))
                     apply_plot_style(fig, ax)
                     ax.hist(series, bins=30, color=ACCENT, alpha=0.75, edgecolor=PLOT_BG, linewidth=0.5)
@@ -2672,7 +3361,7 @@ elif st.session_state.step == 3:
                         ax2.plot(xs, kde(xs), color=ACCENT2, linewidth=2)
                         ax2.set_yticks([])
                         for sp in ax2.spines.values(): sp.set_edgecolor(PLOT_GRID)
-                    ax.set_xlabel(y_var); ax.set_ylabel("频数"); ax.set_title(f"{y_var} 分布直方图")
+                    ax.set_xlabel(y_var); ax.set_ylabel(T["chart_freq"]); ax.set_title(f"{y_var} {T["chart_dist"]}")
                     plt.tight_layout(pad=0.3)
                     _img_path = os.path.join(_TMPDIR, "_chart_22.png")
                     fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2692,7 +3381,7 @@ elif st.session_state.step == 3:
                         if len(valid) > 2:
                             z = np.polyfit(valid[scatter_x], valid[y_var], 1)
                             xs_arr = np.linspace(valid[scatter_x].min(), valid[scatter_x].max(), 200)
-                            ax.plot(xs_arr, np.poly1d(z)(xs_arr), color=ACCENT2, linewidth=2, linestyle="--", label="趋势线")
+                            ax.plot(xs_arr, np.poly1d(z)(xs_arr), color=ACCENT2, linewidth=2, linestyle="--", label=T.get("chart_trend","趋势线"))
                             ax.legend(facecolor=PLOT_BG, edgecolor=PLOT_GRID, labelcolor=PLOT_FG, fontsize=8)
                             corr_val = float(valid[scatter_x].corr(valid[y_var]))
                         ax.set_xlabel(scatter_x); ax.set_ylabel(y_var); ax.set_title(f"{y_var} ~ {scatter_x}")
@@ -2709,20 +3398,22 @@ elif st.session_state.step == 3:
                 _sy = ccfg.get("scatter_y") or y_var
                 fb_chart = fallback_chart(_sy, float(df[_sy].dropna().mean()),
                                           float(df[_sy].dropna().median()),
-                                          float(df[_sy].dropna().skew()), _sx, corr_val)
-                with st.spinner("✦ 正在生成图表趋势解读…"):
+                                          float(df[_sy].dropna().skew()), _sx, corr_val,
+                                          lang=st.session_state.get("lang","zh"))
+                with st.spinner(T["s3_spin_chart"]):
                     text, is_ai = ai_chart_interp(
                         question, _sy, float(df[_sy].dropna().mean()),
                         float(df[_sy].dropna().median()), float(df[_sy].dropna().skew()),
                         _sx, corr_val, fb_chart,
+                        lang=st.session_state.get("lang","zh"),
                     )
-                render_ai("分布形态 · 趋势判断", text, is_ai)
+                render_ai(T["s3_lbl_chart"], text, is_ai)
 
             # 执行回归
             if not st.session_state.analysis_done:
                 reg_df = df[[y_var] + x_vars].dropna()
                 if len(reg_df) < len(x_vars) + 2:
-                    st.error("有效样本量不足，无法运行回归。")
+                    st.error(T["s3_no_sample"])
                     st.stop()
                 X = reg_df[x_vars].values
                 y = reg_df[y_var].values
@@ -2763,7 +3454,7 @@ elif st.session_state.step == 3:
             for col, val, lbl in zip(
                 [mc1, mc2, mc3, mc4],
                 [f"{R['r2']:.4f}", f"{R['adj_r2']:.4f}", f"{R['rmse']:.4f}", R['n']],
-                ["R²", "调整 R²", "RMSE", "有效样本量"],
+                [T["s3_r2"], T["s3_adj_r2"], T["s3_rmse"], T["s3_n_eff"]],
             ):
                 col.markdown(
                     f'<div class="stat-box"><div class="stat-number">{val}</div>'
@@ -2802,7 +3493,7 @@ elif st.session_state.step == 3:
             )
             st.markdown(
                 f"<table class='reg-table'><thead><tr>"
-                f"<th>变量</th><th>系数</th><th>标准误</th><th>t 值</th><th>p 值</th><th>95% 置信区间</th>"
+                f"<th>" + "</th><th>".join(T["s3_reg_cols"]) + "</th>"
                 f"</tr></thead><tbody>{rows_html}</tbody></table>"
                 f"<div style='font-size:0.7rem;color:#3d4560;margin-top:0.7rem;'>"
                 f"*** p&lt;0.001 &nbsp;** p&lt;0.01 &nbsp;* p&lt;0.05 &nbsp;. p&lt;0.1</div>",
@@ -2817,7 +3508,7 @@ elif st.session_state.step == 3:
                 apply_plot_style(fig, ax)
                 ax.scatter(R["y_pred"], R["resid"], color=ACCENT, alpha=0.5, s=15, edgecolors="none")
                 ax.axhline(0, color=ACCENT2, linewidth=1.5, linestyle="--")
-                ax.set_xlabel("拟合值"); ax.set_ylabel("残差"); ax.set_title("残差 vs 拟合值")
+                ax.set_xlabel(T["s3_resid_x"]); ax.set_ylabel(T["s3_resid_y"]); ax.set_title(T["s3_resid_ttl"])
                 plt.tight_layout(pad=0.3)
                 _img_path = os.path.join(_TMPDIR, "_chart_24.png")
                 fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2833,7 +3524,7 @@ elif st.session_state.step == 3:
                 ax.plot([min(osm), max(osm)],
                         [slope_q*min(osm)+intercept_q, slope_q*max(osm)+intercept_q],
                         color=ACCENT2, linewidth=2, linestyle="--")
-                ax.set_xlabel("理论分位数"); ax.set_ylabel("样本分位数"); ax.set_title("Q-Q 图")
+                ax.set_xlabel(T["s3_qq_x"]); ax.set_ylabel(T["s3_qq_y"]); ax.set_title(T["s3_qq_ttl"])
                 plt.tight_layout(pad=0.3)
                 _img_path = os.path.join(_TMPDIR, "_chart_25.png")
                 fig.savefig(_img_path, bbox_inches="tight", dpi=150,
@@ -2852,26 +3543,28 @@ elif st.session_state.step == 3:
             # AI 回归解读
             fb_reg = fallback_regression(
                 y_var, "、".join(x_vars), R["r2"], R["adj_r2"], R["rmse"],
-                "；".join(sig_vars_list), "；".join(insig_vars_list), R["equation"]
+                "；".join(sig_vars_list), "；".join(insig_vars_list), R["equation"],
+                lang=st.session_state.get("lang","zh")
             )
-            with st.spinner("✦ 正在生成回归结果解读…"):
+            with st.spinner(T["s3_spin_reg"]):
                 text, is_ai = ai_reg_interp(
                     question=question, y_var=y_var, x_vars_str="、".join(x_vars),
                     r2=R["r2"], adj_r2=R["adj_r2"], rmse=R["rmse"],
                     sig_vars="；".join(sig_vars_list), insig_vars="；".join(insig_vars_list),
                     equation=R["equation"], fallback_text=fb_reg,
+                    lang=st.session_state.get("lang","zh"),
                 )
-            render_ai("回归结果解读", text, is_ai)
+            render_ai(T["s3_lbl_reg"], text, is_ai)
 
     # 导航
     st.markdown("<hr class='divider'>", unsafe_allow_html=True)
     col_back, col_next = st.columns([1, 1])
     with col_back:
-        if st.button("← 返回调整方案"):
+        if st.button(T["s3_back"]):
             st.session_state.step = 2
             st.rerun()
     with col_next:
-        if st.button("下一步：总体结论与建议 →", width='stretch'):
+        if st.button(T["s3_next"], width='stretch'):
             st.session_state["desc_summary"]    = desc_summary
             st.session_state["sig_vars_list"]   = sig_vars_list
             st.session_state["insig_vars_list"] = insig_vars_list
@@ -2885,11 +3578,14 @@ elif st.session_state.step == 3:
 # STEP 4 · 总体结论与建议
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.step == 4:
-    phase_header("04", "总体结论与建议")
+    T = _get_T()
+    phase_header("04", T["s4_title"])
 
     question      = st.session_state.question
     df            = st.session_state.df
-    chosen_types  = st.session_state.confirmed_analysis_types
+    chosen_types_raw4 = st.session_state.confirmed_analysis_types
+    _type_map_en2zh4 = {"Descriptive Stats":"描述性统计","Comparison":"对比分析","Trend Analysis":"趋势分析","Correlation":"相关性分析","Regression":"回归分析"}
+    chosen_types = [_type_map_en2zh4.get(t,t) for t in chosen_types_raw4]
     R             = st.session_state.reg_results
     sig_vars      = "；".join(st.session_state.get("sig_vars_list", []))
     miss_pct      = df.isnull().sum().sum() / df.size * 100
@@ -2897,22 +3593,27 @@ elif st.session_state.step == 4:
     use_reg       = "回归分析" in chosen_types
 
     st.markdown(
-        f'<div class="question-display">🔍 研究问题：{question}</div>',
+        f'<div class="question-display">{T["s3_q_prefix"]}{question}</div>',
         unsafe_allow_html=True,
     )
 
     # 摘要卡片
-    types_display = "  ·  ".join(chosen_types) if chosen_types else "—"
-    r2_display    = f"{R['r2']:.4f}" if (use_reg and R) else "未执行回归"
+    _type_zh2display = {"描述性统计":T["s2_all_types"][0] if len(T["s2_all_types"])>0 else "描述性统计",
+                        "对比分析":T["s2_all_types"][1] if len(T["s2_all_types"])>1 else "对比分析",
+                        "趋势分析":T["s2_all_types"][2] if len(T["s2_all_types"])>2 else "趋势分析",
+                        "相关性分析":T["s2_all_types"][3] if len(T["s2_all_types"])>3 else "相关性分析",
+                        "回归分析":T["s2_all_types"][4] if len(T["s2_all_types"])>4 else "回归分析"}
+    types_display = "  ·  ".join([_type_zh2display.get(t,t) for t in chosen_types]) if chosen_types else "—"
+    r2_display    = f"{R['r2']:.4f}" if (use_reg and R) else T["s4_no_reg"]
     sig_count     = len(sig_vars.split("；")) if sig_vars else 0
-    sig_display   = f"{sig_count} 个显著" if use_reg else "—"
+    sig_display   = (f"{sig_count} " + T.get("sig_label","个显著")) if use_reg else "—"
     n_display     = R["n"] if (use_reg and R) else df.shape[0]
 
     c1, c2, c3, c4 = st.columns(4)
     for col, val, lbl in zip(
         [c1, c2, c3, c4],
         [types_display, str(n_display), r2_display, sig_display],
-        ["已执行分析", "有效样本量", "回归 R²", "显著变量"],
+        [T["s4_stat_types"], T["s4_stat_n"], T["s4_stat_r2"], T["s4_stat_sig"]],
     ):
         col.markdown(
             f'<div class="stat-box">'
@@ -2935,15 +3636,17 @@ elif st.session_state.step == 4:
 
     fb_conc = fallback_conclusion(
         question, y_for_ai, x_for_ai, chosen_types,
-        r2_for_ai, sig_vars, miss_pct, n_for_ai, desc_summary
+        r2_for_ai, sig_vars, miss_pct, n_for_ai, desc_summary,
+        lang=st.session_state.get("lang","zh")
     )
-    with st.spinner("✦ 正在生成总体结论与建议…"):
+    with st.spinner(T["s4_spinner"]):
         conclusion, is_ai = ai_conclusion(
             question=question, y_var=y_for_ai, x_vars_str=x_for_ai,
             analysis_types_str=analysis_types_str,
             r2=r2_for_ai, sig_vars=sig_vars,
             miss_pct=miss_pct, n=n_for_ai,
             desc_summary=desc_summary, fallback_text=fb_conc,
+            lang=st.session_state.get("lang","zh"),
         )
 
     conclusion_label = "AI 总体结论" if is_ai else "规则总体结论"
@@ -2975,7 +3678,7 @@ elif st.session_state.step == 4:
 
     st.markdown(
         f'<div class="conclusion-card">'
-        f'<div class="conclusion-title">📝 总体结论与建议'
+        f'<div class="conclusion-title">{T["s4_conc_title"]}'
         f'<span style="font-size:0.68rem;font-weight:400;color:#3d4d6a;margin-left:0.8rem;">'
         f'{"（AI 生成）" if is_ai else "（本地规则生成）"}</span></div>'
         f'{conc_html}'
@@ -2992,13 +3695,11 @@ elif st.session_state.step == 4:
         '<div style="font-size:1.05rem;font-weight:700;color:#dde2f0;'
         'margin:0.5rem 0 1rem 0;padding-bottom:0.4rem;'
         'border-bottom:2px solid #2a3a5a;">'
-        '📄 分析报告生成与下载</div>',
+        f"{T['s4_rpt_title']}</div>",
         unsafe_allow_html=True,
     )
     st.markdown(
-        '<div style="font-size:0.82rem;color:#6b7a9a;margin-bottom:1rem;">'
-        '系统将汇总本次所有分析结果，生成一份结构化分析报告，支持 Word (.docx) 格式下载。'
-        '</div>',
+        f'<div style="font-size:0.82rem;color:#6b7a9a;margin-bottom:1rem;">{T["s4_rpt_hint"]}</div>',
         unsafe_allow_html=True,
     )
 
@@ -3007,9 +3708,39 @@ elif st.session_state.step == 4:
     def generate_report_text(question: str, analysis_types_str: str,
                              desc_summary: str, sig_vars: str, conclusion: str,
                              r2: float, n: int, miss_pct: float,
-                             y_var: str, x_vars_str: str) -> str:
+                             y_var: str, x_vars_str: str,
+                             lang: str = "zh") -> str:
+        _rpt_lang = lang
+        if _rpt_lang == "en":
+            _intro = "Please generate a complete data analysis report based on the following information."
+            _struct = (
+                "Please strictly follow this structure, with each section marked by [Section Name]:\n\n"
+                "[1. Research Question]\n1. State the core question\n2. Research background and purpose\n\n"
+                "[2. Data Overview]\n1. Sample size, variables, missing rate (with values)\n2. Key variable stats\n\n"
+                "[3. Methods]\n1. Analysis types used and rationale\n2. Variable selection rationale\n\n"
+                "[4. Key Findings]\n1. Most important finding (with values) — significance\n"
+                "2. Second finding (with values) — significance\n3. Third finding (with values) — significance\n\n"
+                "[5. Conclusion]\n1. Direct answer to research question (with data)\n2. Overall judgment\n\n"
+                "[6. Recommendations]\n1. First actionable recommendation\n2. Second recommendation\n3. Third recommendation\n\n"
+                "[7. Limitations]\n1. Data limitations\n2. Method limitations\n3. Suggested improvements\n\n"
+                "Requirements: each point includes specific values + explanation. Professional report style, no ** bold or # headers."
+            )
+        else:
+            _intro = "请根据以下分析信息，生成一份完整的数据分析报告。"
+            _struct = (
+                "请严格按以下结构生成报告，每个章节用【章节名】标记：\n\n"
+                "【1. 研究问题】\n1. 明确说明本次分析要回答的核心问题\n2. 说明研究背景与分析目的\n\n"
+                "【2. 数据概览】\n1. 样本量、变量数量、缺失率等基本信息（含具体数值）\n2. 核心变量描述（含均值、标准差等）\n\n"
+                "【3. 分析方法】\n1. 本次使用的分析类型及其适用理由\n2. 变量选择依据\n\n"
+                "【4. 关键发现】\n1. 最重要的发现（含具体数值）— 说明意义\n"
+                "2. 第二重要发现（含具体数值）— 说明意义\n3. 第三重要发现（含具体数值）— 说明意义\n\n"
+                "【5. 结论】\n1. 直接回答研究问题（含关键数据）\n2. 综合判断\n\n"
+                "【6. 建议】\n1. 第一条可执行建议\n2. 第二条可执行建议\n3. 第三条可执行建议\n\n"
+                "【7. 局限性】\n1. 数据局限性\n2. 方法局限性\n3. 建议改进方向\n\n"
+                "要求：每点包含具体数值+分析解释，风格为专业分析报告，不使用 ** 加粗或 # 标题。"
+            )
         prompt = (
-            f"请根据以下分析信息，生成一份完整的数据分析报告。\n\n"
+            f"{_intro}\n\n"
             f"研究问题：{question}\n"
             f"分析方法：{analysis_types_str}\n"
             f"样本量：{n}，缺失率：{miss_pct:.1f}%\n"
@@ -3018,34 +3749,8 @@ elif st.session_state.step == 4:
             f"显著自变量：{sig_vars or '无'}\n"
             f"描述性统计摘要：{desc_summary}\n"
             f"分析结论：{conclusion}\n\n"
-            "请严格按以下结构生成报告，每个章节用【章节名】标记：\n\n"
-            "【1. 研究问题】\n"
-            "1. 明确说明本次分析要回答的核心问题\n"
-            "2. 说明研究背景与分析目的\n\n"
-            "【2. 数据概览】\n"
-            "1. 样本量、变量数量、缺失率等基本信息（含具体数值）\n"
-            "2. 核心变量描述（含均值、标准差等关键统计量）\n\n"
-            "【3. 分析方法】\n"
-            "1. 本次使用的分析类型及其适用理由\n"
-            "2. 变量选择依据\n\n"
-            "【4. 关键发现】\n"
-            "1. 最重要的发现（含具体数值）— 说明意义\n"
-            "2. 第二重要发现（含具体数值）— 说明意义\n"
-            "3. 第三重要发现（含具体数值）— 说明意义\n\n"
-            "【5. 结论】\n"
-            "1. 直接回答研究问题（含关键数据）\n"
-            "2. 综合判断\n\n"
-            "【6. 建议】\n"
-            "1. 第一条可执行建议\n"
-            "2. 第二条可执行建议\n"
-            "3. 第三条可执行建议\n\n"
-            "【7. 局限性】\n"
-            "1. 数据局限性（样本、缺失、时间范围等）\n"
-            "2. 方法局限性（模型假设、变量遗漏等）\n"
-            "3. 建议改进方向\n\n"
-            "要求：每点包含具体数值+分析解释，风格为专业分析报告，不使用 ** 加粗或 # 标题。"
-        )
-        result = call_claude(SYSTEM_ANALYST, prompt, max_tokens=2000)
+        ) + _struct
+        result = call_claude(_get_analyst_system(), prompt, max_tokens=2000)
         if _is_api_error(result):
             desc_snip = desc_summary[:200] if desc_summary else "见描述性统计表格"
             conc_snip = conclusion[:300] if conclusion else "见上方结论部分"
@@ -3090,27 +3795,60 @@ elif st.session_state.step == 4:
     col_gen, col_dl_word, col_nav_back, col_nav_restart = st.columns([2, 2, 1, 1])
 
     with col_gen:
-        if st.button("✦ 生成分析报告", width='stretch'):
-            with st.spinner("✦ 正在生成结构化报告…"):
-                report_txt = generate_report_text(
-                    question=question,
+        if st.button(T["s4_gen_btn"], width='stretch'):
+            with st.spinner(T["s4_gen_spin"]):
+                # 分别生成中文结论和英文结论
+                _fb_zh = fallback_conclusion(question, y_for_ai, x_for_ai, chosen_types,
+                                             r2_for_ai, sig_vars, miss_pct, n_for_ai,
+                                             desc_summary, lang="zh")
+                _conc_zh, _ = ai_conclusion(
+                    question=question, y_var=y_for_ai, x_vars_str=x_for_ai,
                     analysis_types_str=analysis_types_str,
-                    desc_summary=desc_summary,
-                    sig_vars=sig_vars,
-                    conclusion=conclusion,
-                    r2=r2_for_ai,
-                    n=n_for_ai,
-                    miss_pct=miss_pct,
-                    y_var=y_for_ai,
-                    x_vars_str=x_for_ai,
+                    r2=r2_for_ai, sig_vars=sig_vars,
+                    miss_pct=miss_pct, n=n_for_ai,
+                    desc_summary=desc_summary, fallback_text=_fb_zh,
+                    lang="zh",
                 )
-                st.session_state["report_text"] = report_txt
-            st.success("报告生成完成，请点击下方按钮下载。")
+                _fb_en = fallback_conclusion(question, y_for_ai, x_for_ai, chosen_types,
+                                             r2_for_ai, sig_vars, miss_pct, n_for_ai,
+                                             desc_summary, lang="en")
+                _conc_en, _ = ai_conclusion(
+                    question=question, y_var=y_for_ai, x_vars_str=x_for_ai,
+                    analysis_types_str=analysis_types_str,
+                    r2=r2_for_ai, sig_vars=sig_vars,
+                    miss_pct=miss_pct, n=n_for_ai,
+                    desc_summary=desc_summary, fallback_text=_fb_en,
+                    lang="en",
+                )
+                # 分析方法字符串也要双语
+                _types_zh = "、".join(chosen_types)
+                _types_en = "、".join([{"描述性统计":"Descriptive Stats","对比分析":"Comparison",
+                    "趋势分析":"Trend Analysis","相关性分析":"Correlation","回归分析":"Regression"
+                }.get(t, t) for t in chosen_types])
+                # 生成中文版报告（用中文结论）
+                report_zh = generate_report_text(
+                    question=question, analysis_types_str=_types_zh,
+                    desc_summary=desc_summary, sig_vars=sig_vars, conclusion=_conc_zh,
+                    r2=r2_for_ai, n=n_for_ai, miss_pct=miss_pct,
+                    y_var=y_for_ai, x_vars_str=x_for_ai,
+                    lang="zh",
+                )
+                # 生成英文版报告（用英文结论）
+                report_en = generate_report_text(
+                    question=question, analysis_types_str=_types_en,
+                    desc_summary=desc_summary, sig_vars=sig_vars, conclusion=_conc_en,
+                    r2=r2_for_ai, n=n_for_ai, miss_pct=miss_pct,
+                    y_var=y_for_ai, x_vars_str=x_for_ai,
+                    lang="en",
+                )
+                st.session_state["report_text"] = report_zh
+                st.session_state["report_text_en"] = report_en
+            st.success(T["s4_gen_done"])
 
     # ── 报告预览 ──────────────────────────────────────────────────────────────
     report_text = st.session_state.get("report_text", "")
     if report_text:
-        with st.expander("📋 报告预览（点击展开）", expanded=False):
+        with st.expander(T["s4_preview"], expanded=False):
             preview_lines = report_text.split("\n")
             preview_html  = ""
             for line in preview_lines:
@@ -3145,25 +3883,27 @@ elif st.session_state.step == 4:
                 from datetime import datetime as _dt
 
                 def _build_docx(report_txt: str, question: str,
-                                chart_paths: list) -> bytes:
+                                chart_paths: list, lang: str = "zh") -> bytes:
                     doc = _DocxDoc()
+                    # 根据 lang 参数选择封面文字（独立于 UI 语言）
+                    _T = _TRANSLATIONS[lang]
 
                     # ── 封面 ──────────────────────────────────────────────────
                     title_p = doc.add_paragraph()
                     title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    run = title_p.add_run("数据分析报告")
+                    run = title_p.add_run(_T["s4_rpt_cover"])
                     run.bold = True; run.font.size = Pt(22)
                     run.font.color.rgb = RGBColor(0x1a, 0x3a, 0x6a)
 
                     sub_p = doc.add_paragraph()
                     sub_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    sub_run = sub_p.add_run(f"研究问题：{question}")
+                    sub_run = sub_p.add_run(_T["s4_rpt_q"] + question)
                     sub_run.font.size = Pt(12)
                     sub_run.font.color.rgb = RGBColor(0x5b, 0x6a, 0x90)
 
                     date_p = doc.add_paragraph()
                     date_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    date_run = date_p.add_run(f"生成时间：{_dt.now().strftime('%Y年%m月%d日 %H:%M')}")
+                    date_run = date_p.add_run(_T["s4_rpt_date"] + _dt.now().strftime('%Y-%m-%d %H:%M'))
                     date_run.font.size = Pt(10)
                     date_run.font.color.rgb = RGBColor(0x8a, 0x92, 0xb0)
 
@@ -3175,29 +3915,30 @@ elif st.session_state.step == 4:
                         if not line:
                             doc.add_paragraph()
                             continue
-                        if line.startswith("【") and "】" in line:
-                            # 章节标题
+                        _is_zh_header = line.startswith("【") and "】" in line
+                        _is_en_header = (line.startswith("[") and ". " in line and "]" in line
+                                         and len(line) > 3 and line[1].isdigit())
+                        if _is_zh_header or _is_en_header:
                             h = doc.add_heading(line, level=2)
                             for run in h.runs:
                                 run.font.color.rgb = RGBColor(0x1a, 0x3a, 0x8a)
                         elif len(line) >= 2 and line[0].isdigit() and line[1] == '.':
-                            # 编号分点
                             p = doc.add_paragraph(style="List Number")
                             p.add_run(line[2:].strip()).font.size = Pt(11)
                         else:
                             p = doc.add_paragraph(line)
-                            p.runs[0].font.size = Pt(11) if p.runs else None
+                            if p.runs: p.runs[0].font.size = Pt(11)
 
                     # ── 图表附录 ──────────────────────────────────────────────
                     valid_charts = [p for p in chart_paths if _os.path.exists(p)]
                     if valid_charts:
                         doc.add_page_break()
-                        h_app = doc.add_heading("附录：分析图表", level=1)
+                        h_app = doc.add_heading(_T["s4_rpt_annex"], level=1)
                         for run in h_app.runs:
                             run.font.color.rgb = RGBColor(0x1a, 0x3a, 0x8a)
                         for i, img_path in enumerate(valid_charts[:12], 1):
                             try:
-                                cap = doc.add_paragraph(f"图 {i}")
+                                cap = doc.add_paragraph(_T["s4_rpt_fig"] + str(i))
                                 cap.runs[0].font.size = Pt(9)
                                 cap.runs[0].font.color.rgb = RGBColor(0x8a, 0x92, 0xb0)
                                 doc.add_picture(img_path, width=Inches(5.5))
@@ -3209,41 +3950,63 @@ elif st.session_state.step == 4:
                     doc.save(buf)
                     return buf.getvalue()
 
-                docx_bytes = _build_docx(
-                    report_text,
-                    question,
-                    st.session_state.get("chart_images", []),
-                )
+                _charts = st.session_state.get("chart_images", [])
+                _q_slug = question[:20].replace(' ','_')
+                # 中文 Word
+                docx_zh = _build_docx(report_text, question, _charts, lang="zh")
                 st.download_button(
-                    label="⬇ 下载 Word 报告 (.docx)",
-                    data=docx_bytes,
-                    file_name=f"分析报告_{question[:20].replace(' ','_')}.docx",
+                    label="⬇ 下载中文分析报告 (.docx)",
+                    data=docx_zh,
+                    file_name=f"分析报告_{_q_slug}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     width='stretch',
                 )
+                # 英文 Word
+                report_text_en = st.session_state.get("report_text_en","")
+                if report_text_en:
+                    try:
+                        docx_en = _build_docx(report_text_en, question, _charts, lang="en")
+                        st.download_button(
+                            label="⬇ Download English Report (.docx)",
+                            data=docx_en,
+                            file_name=f"report_{_q_slug}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            width='stretch',
+                        )
+                    except Exception as _e2:
+                        st.warning(f"English Word failed: {_e2}")
             except ImportError:
-                st.warning("需要安装 python-docx：`pip install python-docx`")
+                st.warning(T["s4_no_docx"])
             except Exception as e:
-                st.error(f"Word 生成失败：{e}")
+                st.error(T["s4_word_fail"] + str(e))
 
-    # ── 纯文本下载（备用）────────────────────────────────────────────────────
+    # ── 纯文本下载 ────────────────────────────────────────────────────────────
     if report_text:
+        _q_slug2 = question[:20].replace(' ','_')
         st.download_button(
-            label="⬇ 下载纯文本报告 (.txt)",
+            label="⬇ 下载中文报告 (.txt)",
             data=report_text.encode("utf-8"),
-            file_name=f"分析报告_{question[:20].replace(' ','_')}.txt",
+            file_name=f"分析报告_{_q_slug2}.txt",
             mime="text/plain",
         )
+        report_text_en = st.session_state.get("report_text_en","")
+        if report_text_en:
+            st.download_button(
+                label="⬇ Download English Report (.txt)",
+                data=report_text_en.encode("utf-8"),
+                file_name=f"report_{_q_slug2}.txt",
+                mime="text/plain",
+            )
 
     st.markdown("<hr class='divider'>", unsafe_allow_html=True)
 
     col_restart, col_back = st.columns([1, 1])
     with col_back:
-        if st.button("← 返回查看分析详情"):
+        if st.button(T["s4_back"]):
             st.session_state.step = 3
             st.rerun()
     with col_restart:
-        if st.button("↺ 重新开始新分析", width='stretch'):
+        if st.button(T["s4_restart"], width='stretch'):
             for k in list(st.session_state.keys()):
                 del st.session_state[k]
             st.rerun()
