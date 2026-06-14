@@ -331,6 +331,14 @@ defaults = {
     "df":                        None,
     "col_info":                  {},
     "plan":                      None,
+    "research_objective":        "",
+    "uploaded_datasets":         [],
+    "dataset_overviews":         [],
+    "data_structure_detection":  {},
+    "data_relationship_detection": {},
+    "question_input_s1":         "",
+    "research_objective_code":   "explore_relationships",
+    "dataset_uploader_nonce":    0,
     # 通用确认字段
     "confirmed_analysis_types":  [],
     # 描述性统计
@@ -399,6 +407,209 @@ def build_col_info(df: pd.DataFrame) -> dict:
                 "missing_pct": round(s.isna().mean() * 100, 1),
             }
     return info
+
+
+def _dataset_identity(item: dict) -> str:
+    return f"{item.get('file_name', '')}::{item.get('sheet_name', '')}"
+
+
+def _uploaded_files_to_datasets(uploaded_files) -> list:
+    """Expand uploaded files into dataset entries, including all Excel sheets."""
+    if not uploaded_files:
+        return []
+    files = uploaded_files if isinstance(uploaded_files, list) else [uploaded_files]
+    datasets = []
+    for file in files:
+        file_name = getattr(file, "name", "dataset")
+        name_lower = file_name.lower()
+        try:
+            if name_lower.endswith((".xlsx", ".xls")):
+                file.seek(0)
+                xl = pd.ExcelFile(file)
+                sheet_names = xl.sheet_names or [0]
+                multiple_sheets = len(sheet_names) > 1
+                for sheet in sheet_names:
+                    file.seek(0)
+                    sheet_name = str(sheet) if multiple_sheets else ""
+                    df_sheet = pd.read_excel(file, sheet_name=sheet)
+                    datasets.append({
+                        "file_name": file_name,
+                        "sheet_name": sheet_name,
+                        "dataset_id": f"{file_name}::{sheet_name}",
+                        "display_name": f"{file_name} / {sheet}" if multiple_sheets else file_name,
+                        "df": df_sheet,
+                    })
+            else:
+                file.seek(0)
+                datasets.append({
+                    "file_name": file_name,
+                    "sheet_name": "",
+                    "dataset_id": f"{file_name}::",
+                    "display_name": file_name,
+                    "df": load_data(file),
+                })
+        finally:
+            try:
+                file.seek(0)
+            except Exception:
+                pass
+    return datasets
+
+
+def _append_unique_datasets(existing: list, incoming: list) -> list:
+    merged = list(existing or [])
+    seen = {_dataset_identity(item) for item in merged}
+    for item in incoming or []:
+        identity = _dataset_identity(item)
+        if identity not in seen:
+            item["dataset_id"] = identity
+            merged.append(item)
+            seen.add(identity)
+    return merged
+
+
+def _dataset_overview_rows(datasets: list) -> list:
+    rows = []
+    for item in datasets:
+        df = item["df"]
+        miss_pct = (df.isnull().sum().sum() / df.size * 100) if df.size else 0
+        rows.append({
+            "file_name": item.get("display_name") or item.get("file_name", "dataset"),
+            "rows": int(df.shape[0]),
+            "columns": int(df.shape[1]),
+            "missing_rate": f"{miss_pct:.1f}%",
+            "column_preview": ", ".join([str(c) for c in df.columns[:8]]),
+        })
+    return rows
+
+
+def _detect_data_structure(datasets: list) -> dict:
+    time_keywords = [
+        "date", "time", "year", "month", "quarter", "week", "day", "period",
+        "\u65e5\u671f", "\u65f6\u95f4", "\u5e74\u4efd", "\u5e74\u5ea6", "\u6708\u4efd", "\u5b63\u5ea6", "\u5468", "\u671f\u95f4"
+    ]
+    id_name_keywords = [
+        "id", "student_id", "firm_id", "employee_id", "customer_id", "user_id",
+        "account_id", "country", "school", "company", "code", "key",
+        "\u7f16\u53f7", "\u4ee3\u7801", "\u56fd\u5bb6", "\u5b66\u6821", "\u516c\u53f8", "\u4f01\u4e1a", "\u5b66\u751f", "\u5458\u5de5", "\u5ba2\u6237", "\u7528\u6237", "\u8d26\u6237"
+    ]
+    weak_entity_keywords = ["country", "school", "company", "firm", "student", "employee", "customer", "user"]
+
+    def _norm(col):
+        return str(col).strip().lower().replace(" ", "_").replace("-", "_")
+
+    def _matches(col, keywords):
+        c = _norm(col)
+        return any(k.lower() in c for k in keywords)
+
+    time_cols = []
+    id_cols = []
+    for item in datasets:
+        df = item["df"]
+        n_rows = len(df)
+        for col in df.columns:
+            col_str = str(col)
+            col_norm = _norm(col)
+            if _matches(col, time_keywords) or pd.api.types.is_datetime64_any_dtype(df[col]):
+                time_cols.append(col_str)
+
+            non_null = df[col].dropna()
+            unique_ratio = (non_null.nunique() / len(non_null)) if len(non_null) else 0
+            name_is_id = _matches(col, id_name_keywords)
+            entity_name = any(k in col_norm for k in weak_entity_keywords)
+            statistical_id = (
+                n_rows >= 10
+                and unique_ratio >= 0.85
+                and not pd.api.types.is_numeric_dtype(df[col])
+            )
+            near_unique_named_id = n_rows >= 2 and unique_ratio >= 0.95 and name_is_id
+
+            if name_is_id or entity_name or statistical_id or near_unique_named_id:
+                id_cols.append(col_str)
+
+    time_cols = sorted(set(time_cols))
+    id_cols = sorted(set(id_cols))
+
+    mode_code = "multi" if len(datasets) > 1 else "single"
+    if time_cols and id_cols:
+        type_code = "panel"
+        reasoning_code = "panel"
+        confidence = 0.94
+    elif time_cols:
+        type_code = "time_series"
+        reasoning_code = "time"
+        confidence = 0.90
+    else:
+        type_code = "cross_sectional"
+        reasoning_code = "cross"
+        confidence = 0.95 if len(datasets) == 1 else 0.90
+
+    return {
+        "mode_code": mode_code,
+        "type_code": type_code,
+        "id_columns": id_cols,
+        "time_columns": time_cols,
+        "reasoning_code": reasoning_code,
+        "confidence": confidence,
+    }
+
+
+def _detect_data_relationship(datasets: list) -> dict:
+    if len(datasets) <= 1:
+        return {"status_code": "single", "merge_keys": [], "reasoning_code": "single"}
+
+    key_terms = ["id", "student_id", "firm_id", "employee_id", "customer_id", "user_id", "account_id", "country", "school", "company", "market_id"]
+    generic_terms = {"price", "value", "amount", "score", "name", "type", "category", "date", "time", "year", "month", "quarter"}
+
+    def norm(col):
+        return str(col).strip().lower().replace(" ", "_").replace("-", "_")
+
+    col_sets = [set(norm(c) for c in item["df"].columns) for item in datasets]
+    common_cols = set.intersection(*col_sets) if col_sets else set()
+    pairwise_shared = set()
+    for i in range(len(col_sets)):
+        for j in range(i + 1, len(col_sets)):
+            pairwise_shared.update(col_sets[i] & col_sets[j])
+
+    strong_keys = sorted(c for c in common_cols if any(term in c for term in key_terms))
+    if strong_keys:
+        return {"status_code": "connected", "merge_keys": strong_keys, "reasoning_code": "connected"}
+
+    similarities = []
+    for i in range(len(col_sets)):
+        for j in range(i + 1, len(col_sets)):
+            union = col_sets[i] | col_sets[j]
+            similarities.append(len(col_sets[i] & col_sets[j]) / len(union) if union else 0)
+    max_similarity = max(similarities) if similarities else 0
+    non_generic_shared = sorted(c for c in pairwise_shared if c not in generic_terms)
+
+    if max_similarity >= 0.75 and pairwise_shared:
+        return {"status_code": "connected", "merge_keys": sorted(pairwise_shared), "reasoning_code": "compatible"}
+    if non_generic_shared or max_similarity >= 0.35:
+        return {"status_code": "unclear", "merge_keys": non_generic_shared[:8], "reasoning_code": "unclear"}
+    return {"status_code": "independent", "merge_keys": [], "reasoning_code": "independent"}
+
+
+def _sync_research_setup_cache(datasets: list):
+    datasets = list(datasets or [])
+    for item in datasets:
+        item["dataset_id"] = _dataset_identity(item)
+    overview_rows = _dataset_overview_rows(datasets) if datasets else []
+    detection = _detect_data_structure(datasets) if datasets else {}
+    relationship = _detect_data_relationship(datasets) if datasets else {}
+    st.session_state.uploaded_datasets = datasets
+    st.session_state.dataset_overviews = overview_rows
+    st.session_state.data_structure_detection = detection
+    st.session_state.data_relationship_detection = relationship
+    if datasets:
+        st.session_state.df = datasets[0]["df"]
+        st.session_state.col_info = build_col_info(datasets[0]["df"])
+    else:
+        st.session_state.df = None
+        st.session_state.col_info = {}
+    st.session_state.plan = None
+    st.session_state.analysis_done = False
+    return overview_rows, detection, relationship
 
 
 def dtype_badge(dtype) -> str:
@@ -960,18 +1171,63 @@ _TRANSLATIONS = {
         "app_title":     "AI 数据分析工具",
         "app_subtitle":  "问题驱动 · AI 协作 · 数据与解读同步输出",
         "lang_btn":      "🌐 English",
-        "step_labels":   [("01","问题导入"),("02","方案设计与确认"),
+        "step_labels":   [("01","研究设置"),("02","方案设计与确认"),
                           ("03","分析结果与解释"),("04","总体结论")],
-        "s1_title":      "问题导入",
-        "s1_desc":       "在开始分析之前，请先描述你想研究的问题或目标。<br>明确的问题能帮助 AI 推荐更合适的变量和分析方法，让后续结论更有针对性。",
-        "s1_q_label":    "你的研究问题 / 分析目标",
+        "s1_title":      "研究设置",
+        "s1_desc":       "\u63cf\u8ff0\u4f60\u7684\u7814\u7a76\u95ee\u9898\u5e76\u4e0a\u4f20\u76f8\u5173\u6570\u636e\u3002\u7cfb\u7edf\u5c06\u9996\u5148\u8bc6\u522b\u6570\u636e\u7ed3\u6784\uff0c\u518d\u534f\u52a9\u8bbe\u8ba1\u7814\u7a76\u65b9\u6848\u4e0e\u5206\u6790\u6d41\u7a0b\u3002",
+        "s1_q_label":    "研究问题 / 研究目标",
         "s1_placeholder":"例如：哪些因素影响学生的期末成绩？\n例如：房屋面积和地段对房价有多大影响？\n例如：员工工作年限与薪资之间是否存在显著关系？",
-        "s1_upload":     "📂 上传数据文件",
-        "s1_upload_hint":"支持 CSV（UTF-8 / GBK）和 Excel（.xlsx / .xls）",
-        "s1_next":       "下一步：AI 方案设计 →",
+        "s1_objective":  "研究目标类型",
+        "s1_objective_options": ["探索变量关系", "比较不同组别", "解释结果变量", "预测结果变量", "暂不确定"],
+        "s1_upload":     "上传数据集",
+        "s1_upload_hint":"支持 CSV（UTF-8 / GBK）和 Excel（.xlsx / .xls）；Excel 多 Sheet 会作为多个潜在数据集检查",
+        "s1_dataset_overview": "数据集概览",
+        "s1_file_name":  "文件名",
+        "s1_rows":       "行数",
+        "s1_columns":    "列数",
+        "s1_missing_rate":"缺失率",
+        "s1_column_preview":"列名预览",
+        "s1_detection":  "数据结构识别",
+        "s1_detected_mode":"识别出的研究模式",
+        "s1_detected_type":"识别出的数据类型",
+        "s1_id_columns": "潜在 ID 列",
+        "s1_time_columns":"潜在时间列",
+        "s1_reasoning":  "判断依据",
+        "s1_confidence": "置信度",
+        "s1_mode_single":"单数据集研究",
+        "s1_mode_multi": "多数据集研究",
+        "s1_type_cross": "横截面数据",
+        "s1_type_time":  "时间序列数据",
+        "s1_type_panel": "面板 / 纵向数据",
+        "s1_no_columns": "未检测到明显候选列",
+        "s1_reason_cross":"\u672a\u68c0\u6d4b\u5230\u65f6\u95f4\u53d8\u91cf\uff0c\u4e14\u89c2\u6d4b\u503c\u770b\u8d77\u6765\u4ee3\u8868\u5b9e\u4f53\u5728\u5355\u4e00\u65f6\u95f4\u622a\u9762\u7684\u72b6\u6001\uff0c\u56e0\u6b64\u5c06\u6570\u636e\u89c6\u4e3a\u6a2a\u622a\u9762\u6570\u636e\u3002",
+        "s1_reason_time": "\u68c0\u6d4b\u5230\u65f6\u95f4\u76f8\u5173\u5217\uff0c\u4e14\u672a\u53d1\u73b0\u660e\u663e ID \u7c7b\u5b9e\u4f53\u5217\uff0c\u56e0\u6b64\u5c06\u6570\u636e\u89c6\u4e3a\u65f6\u95f4\u5e8f\u5217\u6570\u636e\u3002",
+        "s1_reason_panel":"\u540c\u65f6\u68c0\u6d4b\u5230\u6f5c\u5728 ID \u5217\u548c\u65f6\u95f4\u5217\uff0c\u8bf4\u660e\u540c\u4e00\u5b9e\u4f53\u53ef\u80fd\u8de8\u591a\u4e2a\u65f6\u95f4\u70b9\u88ab\u91cd\u590d\u89c2\u5bdf\uff0c\u56e0\u6b64\u5c06\u6570\u636e\u89c6\u4e3a\u9762\u677f/\u7eb5\u5411\u6570\u636e\u3002",
+        "s1_loaded_datasets": "\u5df2\u52a0\u8f7d\u6570\u636e\u96c6",
+        "s1_data_retained": "\u5f53\u524d\u6570\u636e\u5df2\u4fdd\u7559\u5728\u5de5\u4f5c\u533a\u4e2d\u3002",
+        "s1_show_full": "\u663e\u793a\u5b8c\u6574\u6570\u636e",
+        "s1_large_dataset": "\u6570\u636e\u91cf\u8f83\u5927\uff0c\u5b8c\u6574\u663e\u793a\u53ef\u80fd\u5f71\u54cd\u9875\u9762\u6027\u80fd\u3002",
+        "s1_remove_dataset": "\u5220\u9664",
+        "s1_data_preview": "\u6570\u636e\u9884\u89c8",
+        "s1_remove_x": "\u00d7",
+        "s1_relationship_detection": "\u6570\u636e\u5173\u7cfb\u8bc6\u522b",
+        "s1_workspace_summary": "\u5de5\u4f5c\u533a\u5c42\u9762\u603b\u7ed3",
+        "s1_dataset_detection_summary": "\u6570\u636e\u96c6\u7ed3\u6784\u8bc6\u522b\u6458\u8981",
+        "s1_relationship_status": "\u5173\u7cfb\u72b6\u6001",
+        "s1_potential_merge_key": "\u6f5c\u5728\u5408\u5e76\u952e",
+        "s1_rel_connected": "\u5df2\u68c0\u6d4b\u5230\u6f5c\u5728\u5173\u8054",
+        "s1_rel_unclear": "\u5173\u7cfb\u4e0d\u660e\u786e",
+        "s1_rel_independent": "\u72ec\u7acb\u6570\u636e\u96c6",
+        "s1_rel_no_key": "\u672a\u68c0\u6d4b\u5230\u53ef\u9760\u5408\u5e76\u952e",
+        "s1_rel_reason_connected": "\u591a\u4e2a\u6570\u636e\u96c6\u4e4b\u95f4\u5b58\u5728\u5171\u540c ID \u6216\u5b9e\u4f53\u952e\uff0c\u53ef\u80fd\u652f\u6301\u540e\u7eed\u5173\u8054\u5206\u6790\u3002",
+        "s1_rel_reason_compatible": "\u591a\u4e2a\u6570\u636e\u96c6\u5177\u6709\u9ad8\u5ea6\u76f8\u4f3c\u7684\u5b57\u6bb5\u7ed3\u6784\uff0c\u53ef\u80fd\u662f\u540c\u7c7b\u8868\u6216\u53ef\u517c\u5bb9\u6570\u636e\u3002",
+        "s1_rel_reason_unclear": "\u68c0\u6d4b\u5230\u90e8\u5206\u5171\u4eab\u5b57\u6bb5\uff0c\u4f46\u5c1a\u65e0\u6cd5\u786e\u8ba4\u53ef\u9760\u7684\u5408\u5e76\u5173\u7cfb\u3002",
+        "s1_rel_reason_independent": "\u672a\u5728\u5df2\u4e0a\u4f20\u7684\u6570\u636e\u96c6\u4e4b\u95f4\u68c0\u6d4b\u5230\u660e\u663e\u5173\u8054\u3002\u8fd9\u4e9b\u6570\u636e\u53ef\u80fd\u9700\u8981\u5206\u522b\u5206\u6790\uff0c\u6216\u5728 Research Design \u9636\u6bb5\u624b\u52a8\u5efa\u7acb\u5173\u8054\u3002",
+        "s1_next":       "下一步：研究方案设计 →",
         "s1_err_q":      "请先输入你的研究问题。",
         "s1_err_file":   "请上传数据文件。",
         "s1_err_num":    "数据中没有可分析的数值列，请检查文件内容。",
+        "s1_err_load":   "文件读取失败：",
         "s2_title":      "分析方案设计与确认",
         "s2_q_prefix":   "🔍 研究问题：",
         "s2_overview":   "📋 数据概览（点击展开）",
@@ -1192,18 +1448,63 @@ _TRANSLATIONS = {
         "app_title":     "AI Data Analysis Tool",
         "app_subtitle":  "Question-Driven · AI-Assisted · Data & Insights Unified",
         "lang_btn":      "🌐 中文",
-        "step_labels":   [("01","Problem Input"),("02","Plan Design"),
+        "step_labels":   [("01","Research Setup"),("02","Plan Design"),
                           ("03","Analysis Results"),("04","Conclusion")],
-        "s1_title":      "Problem Input",
-        "s1_desc":       "Describe the question or goal you want to explore.<br>A clear question helps AI recommend better variables and analysis methods.",
-        "s1_q_label":    "Your Research Question / Analysis Goal",
+        "s1_title":      "Research Setup",
+        "s1_desc":       "Describe your research question and upload relevant data. The system will first identify the data structure, then assist in designing the research and analysis workflow.",
+        "s1_q_label":    "Research Question / Research Goal",
         "s1_placeholder":"e.g. What factors affect students' exam scores?\ne.g. How do area and location influence house prices?\ne.g. Is there a significant relationship between tenure and salary?",
-        "s1_upload":     "📂 Upload Data File",
-        "s1_upload_hint":"Supports CSV (UTF-8 / GBK) and Excel (.xlsx / .xls)",
-        "s1_next":       "Next: AI Plan Design →",
+        "s1_objective":  "Research Objective",
+        "s1_objective_options": ["Explore relationships", "Compare groups", "Explain outcomes", "Predict outcomes", "Not sure yet"],
+        "s1_upload":     "Upload Dataset(s)",
+        "s1_upload_hint":"Supports CSV (UTF-8 / GBK) and Excel (.xlsx / .xls); multiple Excel sheets are reviewed as potential datasets",
+        "s1_dataset_overview": "Dataset Overview",
+        "s1_file_name":  "File name",
+        "s1_rows":       "Rows",
+        "s1_columns":    "Columns",
+        "s1_missing_rate":"Missing rate",
+        "s1_column_preview":"Column preview",
+        "s1_detection":  "Data Structure Detection",
+        "s1_detected_mode":"Detected research mode",
+        "s1_detected_type":"Detected data type",
+        "s1_id_columns": "Potential ID columns",
+        "s1_time_columns":"Potential time columns",
+        "s1_reasoning":  "Reasoning",
+        "s1_confidence": "Confidence",
+        "s1_mode_single":"Single Dataset Research",
+        "s1_mode_multi": "Multi-Dataset Research",
+        "s1_type_cross": "Cross-sectional Data",
+        "s1_type_time":  "Time Series Data",
+        "s1_type_panel": "Panel / Longitudinal Data",
+        "s1_no_columns": "No obvious candidate columns detected",
+        "s1_reason_cross":"No time variable was detected and observations appear to represent a single snapshot of entities. Therefore the dataset is treated as cross-sectional data.",
+        "s1_reason_time": "Time-related columns were detected and no obvious ID column was found. Therefore the dataset is treated as time series data.",
+        "s1_reason_panel":"Both potential ID columns and time columns were detected, suggesting repeated observations of the same entities over time. Therefore the dataset is treated as panel or longitudinal data.",
+        "s1_loaded_datasets": "Loaded Dataset(s)",
+        "s1_data_retained": "Your datasets are still available in the workspace.",
+        "s1_show_full": "Show Full Dataset",
+        "s1_large_dataset": "Large datasets may take longer to render.",
+        "s1_remove_dataset": "Remove",
+        "s1_data_preview": "Data Preview",
+        "s1_remove_x": "\u00d7",
+        "s1_relationship_detection": "Data Relationship Detection",
+        "s1_workspace_summary": "Workspace-level Summary",
+        "s1_dataset_detection_summary": "Dataset Detection Summary",
+        "s1_relationship_status": "Relationship Status",
+        "s1_potential_merge_key": "Potential Merge Key",
+        "s1_rel_connected": "Potential Relationship Detected",
+        "s1_rel_unclear": "Unclear",
+        "s1_rel_independent": "Independent Datasets",
+        "s1_rel_no_key": "No reliable merge key detected",
+        "s1_rel_reason_connected": "Common ID or entity keys were found across datasets, which may support linked analysis later.",
+        "s1_rel_reason_compatible": "The datasets have highly compatible column structures and may represent similar tables or compatible records.",
+        "s1_rel_reason_unclear": "Potential shared columns detected, but no reliable merge relationship was confirmed.",
+        "s1_rel_reason_independent": "No clear relationship was detected among the uploaded datasets. These datasets may need to be analyzed separately or linked manually during the Research Design stage.",
+        "s1_next":       "Next: Research Design →",
         "s1_err_q":      "Please enter your research question first.",
         "s1_err_file":   "Please upload a data file.",
         "s1_err_num":    "No numeric columns found. Please check your file.",
+        "s1_err_load":   "File loading failed: ",
         "s2_title":      "Plan Design & Confirmation",
         "s2_q_prefix":   "🔍 Research Question: ",
         "s2_overview":   "📋 Data Overview (click to expand)",
@@ -1524,6 +1825,54 @@ st.markdown("<hr class='divider'>", unsafe_allow_html=True)
 if st.session_state.step == 1:
     T = _get_T()
     phase_header("01", T["s1_title"])
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child div.stButton > button {
+            width: 2rem;
+            height: 2rem;
+            min-height: 2rem;
+            padding: 0;
+            border-radius: 999px;
+            border: 1px solid rgba(130, 146, 180, 0.45);
+            background: rgba(128, 139, 160, 0.18);
+            color: #dde2f0;
+            font-size: 1rem;
+            line-height: 1;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    objective_codes = [
+        "explore_relationships",
+        "compare_groups",
+        "explain_outcomes",
+        "predict_outcomes",
+        "not_sure_yet",
+    ]
+    objective_labels = dict(zip(objective_codes, T["s1_objective_options"]))
+    legacy_objective_map = {
+        "\u63a2\u7d22\u53d8\u91cf\u5173\u7cfb": "explore_relationships",
+        "Explore relationships": "explore_relationships",
+        "\u6bd4\u8f83\u4e0d\u540c\u7ec4\u522b": "compare_groups",
+        "Compare groups": "compare_groups",
+        "\u89e3\u91ca\u7ed3\u679c\u53d8\u91cf": "explain_outcomes",
+        "Explain outcomes": "explain_outcomes",
+        "\u9884\u6d4b\u7ed3\u679c\u53d8\u91cf": "predict_outcomes",
+        "Predict outcomes": "predict_outcomes",
+        "\u6682\u4e0d\u786e\u5b9a": "not_sure_yet",
+        "Not sure yet": "not_sure_yet",
+    }
+    _saved_objective = st.session_state.get("research_objective_code") or st.session_state.get("research_objective", "")
+    if _saved_objective not in objective_codes:
+        _saved_objective = legacy_objective_map.get(_saved_objective, "explore_relationships")
+    st.session_state["research_objective_code"] = _saved_objective
+    st.session_state["research_objective"] = _saved_objective
+
+    if st.session_state.get("question") and not st.session_state.get("question_input_s1"):
+        st.session_state["question_input_s1"] = st.session_state.question
 
     st.markdown(
         f'<div class="card">'
@@ -1536,23 +1885,234 @@ if st.session_state.step == 1:
         T["s1_q_label"],
         placeholder=T["s1_placeholder"],
         height=120,
-        value=st.session_state.question,
+        key="question_input_s1",
     )
+    research_objective_code = st.radio(
+        T["s1_objective"],
+        objective_codes,
+        index=objective_codes.index(st.session_state["research_objective_code"]),
+        format_func=lambda code: objective_labels[code],
+        horizontal=True,
+        key="research_objective_code",
+    )
+    st.session_state["question"] = question_input.strip()
+    st.session_state["research_objective"] = research_objective_code
     st.markdown("</div>", unsafe_allow_html=True)
 
+    st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown(
-        '<div class="card">',
+        f'<div style="font-size:0.72rem;font-weight:700;letter-spacing:0.12em;'
+        f'text-transform:uppercase;color:#5b8dee;margin-bottom:0.8rem;">{T["s1_upload"]}</div>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        '<div style="font-size:0.72rem;font-weight:700;letter-spacing:0.12em;'
-        'text-transform:uppercase;color:#5b8dee;margin-bottom:0.8rem;">📂 上传数据文件</div>',
-        unsafe_allow_html=True,
-    )
+    uploader_key = f"dataset_uploader_{st.session_state.get('dataset_uploader_nonce', 0)}"
     uploaded = st.file_uploader(
         T["s1_upload_hint"],
         type=["csv", "xlsx", "xls"],
+        accept_multiple_files=True,
+        key=uploader_key,
     )
+
+    cached_datasets = st.session_state.get("uploaded_datasets", []) or []
+    if cached_datasets and not all(isinstance(d, dict) and "df" in d for d in cached_datasets):
+        cached_datasets = []
+        _sync_research_setup_cache([])
+    datasets = cached_datasets
+    overview_rows = st.session_state.get("dataset_overviews", []) or []
+    detection = st.session_state.get("data_structure_detection", {}) or {}
+    relationship = st.session_state.get("data_relationship_detection", {}) or {}
+
+    if uploaded:
+        try:
+            incoming_datasets = _uploaded_files_to_datasets(uploaded)
+            datasets = _append_unique_datasets(cached_datasets, incoming_datasets)
+            overview_rows, detection, relationship = _sync_research_setup_cache(datasets)
+            st.session_state.dataset_uploader_nonce = st.session_state.get("dataset_uploader_nonce", 0) + 1
+            st.rerun()
+        except Exception as e:
+            st.error(T["s1_err_load"] + str(e))
+            datasets = cached_datasets
+            overview_rows = st.session_state.get("dataset_overviews", []) or []
+            detection = st.session_state.get("data_structure_detection", {}) or {}
+            relationship = st.session_state.get("data_relationship_detection", {}) or {}
+    elif datasets:
+        if not overview_rows or not detection or (len(datasets) > 1 and not relationship):
+            overview_rows, detection, relationship = _sync_research_setup_cache(datasets)
+        st.info(T["s1_data_retained"])
+
+    if datasets:
+        type_map = {
+            "cross_sectional": T["s1_type_cross"],
+            "time_series": T["s1_type_time"],
+            "panel": T["s1_type_panel"],
+        }
+        reason_map = {
+            "cross": T["s1_reason_cross"],
+            "time": T["s1_reason_time"],
+            "panel": T["s1_reason_panel"],
+        }
+        status_map = {
+            "connected": T["s1_rel_connected"],
+            "unclear": T["s1_rel_unclear"],
+            "independent": T["s1_rel_independent"],
+        }
+        rel_reason_map = {
+            "connected": T["s1_rel_reason_connected"],
+            "compatible": T["s1_rel_reason_compatible"],
+            "unclear": T["s1_rel_reason_unclear"],
+            "independent": T["s1_rel_reason_independent"],
+        }
+
+        st.markdown(
+            f'<div style="font-size:0.72rem;font-weight:700;letter-spacing:0.12em;'
+            f'text-transform:uppercase;color:#5b8dee;margin:1.2rem 0 0.6rem;">{T["s1_loaded_datasets"]}</div>',
+            unsafe_allow_html=True,
+        )
+        for idx, item in enumerate(list(datasets)):
+            df_item = item["df"]
+            display_name = item.get("display_name") or item.get("file_name") or f"Dataset {idx + 1}"
+            miss_pct = (df_item.isnull().sum().sum() / df_item.size * 100) if df_item.size else 0
+            item_detection = _detect_data_structure([item])
+            item_id_cols = item_detection.get("id_columns") or []
+            item_time_cols = item_detection.get("time_columns") or []
+            col_expander, col_remove = st.columns([8, 1])
+            with col_expander:
+                with st.expander(display_name, expanded=False):
+                    m1, m2, m3 = st.columns(3)
+                    m1.markdown(
+                        f'<div class="stat-box"><div class="stat-number">{df_item.shape[0]}</div>'
+                        f'<div class="stat-label">{T["s1_rows"]}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                    m2.markdown(
+                        f'<div class="stat-box"><div class="stat-number">{df_item.shape[1]}</div>'
+                        f'<div class="stat-label">{T["s1_columns"]}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                    m3.markdown(
+                        f'<div class="stat-box"><div class="stat-number">{miss_pct:.1f}%</div>'
+                        f'<div class="stat-label">{T["s1_missing_rate"]}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        f'**{T["s1_column_preview"]}:** {", ".join([str(c) for c in df_item.columns[:8]])}'
+                    )
+                    st.markdown(f'**{T["s1_dataset_detection_summary"]}**')
+                    d1, d2 = st.columns(2)
+                    d1.markdown(
+                        f'<div class="stat-box"><div class="stat-number">{type_map.get(item_detection.get("type_code"), "-")}</div>'
+                        f'<div class="stat-label">{T["s1_detected_type"]}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                    d2.markdown(
+                        f'<div class="stat-box"><div class="stat-number">{item_detection.get("confidence", 0):.0%}</div>'
+                        f'<div class="stat-label">{T["s1_confidence"]}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        f'**{T["s1_id_columns"]}:** {", ".join(item_id_cols[:8]) if item_id_cols else T["s1_no_columns"]}'
+                    )
+                    st.markdown(
+                        f'**{T["s1_time_columns"]}:** {", ".join(item_time_cols[:8]) if item_time_cols else T["s1_no_columns"]}'
+                    )
+                    st.markdown(
+                        f'**{T["s1_reasoning"]}:** {reason_map.get(item_detection.get("reasoning_code"), "-")}'
+                    )
+                    show_full = st.checkbox(
+                        T["s1_show_full"],
+                        key=f"show_full_dataset_{idx}_{_dataset_identity(item)}",
+                    )
+                    st.markdown(f'**{T["s1_data_preview"]}**')
+                    if show_full:
+                        if len(df_item) > 1000:
+                            st.warning(T["s1_large_dataset"])
+                        st.dataframe(df_item, width='stretch')
+                    else:
+                        st.dataframe(df_item.head(20), width='stretch')
+            with col_remove:
+                st.markdown("<div style='height:0.25rem'></div>", unsafe_allow_html=True)
+                if st.button(T["s1_remove_x"], key=f"remove_dataset_{idx}_{_dataset_identity(item)}", help=T["s1_remove_dataset"]):
+                    datasets = [d for j, d in enumerate(datasets) if j != idx]
+                    overview_rows, detection, relationship = _sync_research_setup_cache(datasets)
+                    st.rerun()
+
+        st.markdown(
+            f'<div style="font-size:0.72rem;font-weight:700;letter-spacing:0.12em;'
+            f'text-transform:uppercase;color:#5b8dee;margin:1.2rem 0 0.6rem;">{T["s1_dataset_overview"]}</div>',
+            unsafe_allow_html=True,
+        )
+        overview_rows = overview_rows or _dataset_overview_rows(datasets)
+        overview_df = pd.DataFrame(overview_rows).rename(columns={
+            "file_name": T["s1_file_name"],
+            "rows": T["s1_rows"],
+            "columns": T["s1_columns"],
+            "missing_rate": T["s1_missing_rate"],
+            "column_preview": T["s1_column_preview"],
+        })
+        st.dataframe(overview_df, width='stretch', hide_index=True)
+
+        if len(datasets) == 1:
+            detection = _detect_data_structure([datasets[0]])
+            mode_label = T["s1_mode_single"]
+            id_cols = detection.get("id_columns") or []
+            time_cols = detection.get("time_columns") or []
+            st.markdown(
+                f'<div style="font-size:0.72rem;font-weight:700;letter-spacing:0.12em;'
+                f'text-transform:uppercase;color:#5b8dee;margin:1.2rem 0 0.6rem;">{T["s1_detection"]}</div>',
+                unsafe_allow_html=True,
+            )
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(
+                f'<div class="stat-box"><div class="stat-number">{mode_label}</div>'
+                f'<div class="stat-label">{T["s1_detected_mode"]}</div></div>',
+                unsafe_allow_html=True,
+            )
+            c2.markdown(
+                f'<div class="stat-box"><div class="stat-number">{type_map.get(detection.get("type_code"), "-")}</div>'
+                f'<div class="stat-label">{T["s1_detected_type"]}</div></div>',
+                unsafe_allow_html=True,
+            )
+            c3.markdown(
+                f'<div class="stat-box"><div class="stat-number">{detection.get("confidence", 0):.0%}</div>'
+                f'<div class="stat-label">{T["s1_confidence"]}</div></div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f'**{T["s1_id_columns"]}:** {", ".join(id_cols[:8]) if id_cols else T["s1_no_columns"]}'
+            )
+            st.markdown(
+                f'**{T["s1_time_columns"]}:** {", ".join(time_cols[:8]) if time_cols else T["s1_no_columns"]}'
+            )
+            st.markdown(
+                f'**{T["s1_reasoning"]}:** {reason_map.get(detection.get("reasoning_code"), "-")}'
+            )
+        else:
+            relationship = relationship or _detect_data_relationship(datasets)
+            merge_keys = relationship.get("merge_keys") or []
+            st.markdown(
+                f'<div style="font-size:0.72rem;font-weight:700;letter-spacing:0.12em;'
+                f'text-transform:uppercase;color:#5b8dee;margin:1.2rem 0 0.6rem;">{T["s1_workspace_summary"]}</div>',
+                unsafe_allow_html=True,
+            )
+            w1, w2, w3 = st.columns(3)
+            w1.markdown(
+                f'<div class="stat-box"><div class="stat-number">{T["s1_mode_multi"]}</div>'
+                f'<div class="stat-label">{T["s1_detected_mode"]}</div></div>',
+                unsafe_allow_html=True,
+            )
+            w2.markdown(
+                f'<div class="stat-box"><div class="stat-number">{status_map.get(relationship.get("status_code"), "-")}</div>'
+                f'<div class="stat-label">{T["s1_relationship_status"]}</div></div>',
+                unsafe_allow_html=True,
+            )
+            w3.markdown(
+                f'<div class="stat-box"><div class="stat-number">{", ".join(merge_keys[:4]) if merge_keys else T["s1_rel_no_key"]}</div>'
+                f'<div class="stat-label">{T["s1_potential_merge_key"]}</div></div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f'**{T["s1_reasoning"]}:** {rel_reason_map.get(relationship.get("reasoning_code"), "-")}'
+            )
     st.markdown("</div>", unsafe_allow_html=True)
 
     col_btn, col_tip = st.columns([1, 3])
@@ -1562,24 +2122,33 @@ if st.session_state.step == 1:
     if go:
         if not question_input.strip():
             st.error(T["s1_err_q"])
-        elif uploaded is None:
+        elif not datasets:
             st.error(T["s1_err_file"])
         else:
             try:
-                df = load_data(uploaded)
+                overview_rows = overview_rows or _dataset_overview_rows(datasets)
+                detection = detection or _detect_data_structure(datasets)
+                relationship = relationship or _detect_data_relationship(datasets)
+                df = datasets[0]["df"]
                 st.session_state.df        = df
                 st.session_state.question  = question_input.strip()
+                st.session_state.research_objective = research_objective_code
+                st.session_state.research_objective_code = research_objective_code
                 st.session_state.col_info  = build_col_info(df)
-                st.session_state.plan      = None   # 清除旧方案
+                st.session_state.uploaded_datasets = datasets
+                st.session_state.dataset_overviews = overview_rows
+                st.session_state.data_structure_detection = detection
+                st.session_state.data_relationship_detection = relationship
+                st.session_state.plan      = None
                 st.session_state.step      = 2
                 st.rerun()
             except Exception as e:
-                st.error(T.get("s1_err_load","文件读取失败：") + str(e))
+                st.error(T["s1_err_load"] + str(e))
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 2 · AI 分析方案设计 + 用户确认与调整（合并步骤）
-# ══════════════════════════════════════════════════════════════════════════════
+# ???????????????????????????????????????????????????????????????????????????????
+# STEP 2 ? AI ?????? + ?????????????
+# ???????????????????????????????????????????????????????????????????????????????
 elif st.session_state.step == 2:
     T = _get_T()
     phase_header("02", T["s2_title"])
